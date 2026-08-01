@@ -1492,9 +1492,12 @@ function updateImplantSelection() {
   if (deleteBtn && !deleteBtn._handler) {
     deleteBtn._handler = true;
     deleteBtn.onclick = async () => {
-      if (!confirm(`Delete ${selected.length} implant${selected.length !== 1 ? 's' : ''}?`)) return;
+      const cbs = $$('#implants-body input[type="checkbox"]');
+      const toDelete = cbs.filter(cb => cb.checked).map(cb => cb.dataset.name);
+      if (!toDelete.length) return;
+      if (!confirm(`Delete ${toDelete.length} implant${toDelete.length !== 1 ? 's' : ''}?`)) return;
       let failed = 0;
-      for (const name of selected) {
+      for (const name of toDelete) {
         try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch { failed++; }
       }
       if (failed) alert(`Failed to delete ${failed} implant(s)`);
