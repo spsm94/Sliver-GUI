@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sliver Web GUI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="shell">
+
+  <!-- menu bar: Sliver | View | Payloads | Listeners | Help -->
+  <div class="menubar" id="menubar">
+    <div class="brand"><span class="mark">&#9760;</span>SLIVER</div>
+
+    <div class="mbtn" data-menu="sliver">
+      <button>Sliver</button>
+      <div class="ddown">
+        <button data-act="about">About / Connection</button>
+      </div>
+    </div>
+
+    <div class="mbtn" data-menu="view">
+      <button>View</button>
+      <div class="ddown">
+        <button data-act="view-graph">Targets &mdash; Graph</button>
+        <button data-act="view-table">Targets &mdash; Table</button>
+        <hr>
+        <button data-act="open-tab" data-tab="log">Event Log</button>
+        <button data-act="open-tab" data-tab="console">Sliver Console</button>
+        <hr>
+        <button data-act="open-tab" data-tab="pivotgraph">Proxy Pivots</button>
+      </div>
+    </div>
+
+    <div class="mbtn" data-menu="payloads">
+      <button>Payloads</button>
+      <div class="ddown">
+        <button data-act="modal" data-modal="generate">Generate Payload&hellip;</button>
+        <button data-act="open-tab" data-tab="profiles">Implant Profiles</button>
+        <button data-act="modal" data-modal="stager">Generate Stager&hellip;</button>
+        <button data-act="open-tab" data-tab="implants">Implant Builds</button>
+      </div>
+    </div>
+
+    <div class="mbtn" data-menu="listeners">
+      <button>Listeners</button>
+      <div class="ddown">
+        <button data-act="modal" data-modal="listener">Start Listener&hellip;</button>
+        <button data-act="open-tab" data-tab="jobs">Manage Listeners</button>
+      </div>
+    </div>
+
+    <div class="mbtn" data-menu="help">
+      <button>Help</button>
+      <div class="ddown">
+        <button data-act="open-tab" data-tab="help">Command Reference</button>
+      </div>
+    </div>
+
+    <div class="mb-spacer"></div>
+    <div class="statchips">
+      <span class="chip"><span class="dot session"></span><span id="chip-sessions">0</span> sessions</span>
+      <span class="chip"><span class="dot beacon"></span><span id="chip-beacons">0</span> beacons</span>
+      <span class="chip"><span class="dot dead"></span><span id="chip-dead">0</span> dead</span>
+    </div>
+    <span class="conn" id="conn">connecting&hellip;</span>
+  </div>
+
+  <!-- toolbar -->
+  <div class="toolbar">
+    <div class="segmented">
+      <button id="btnGraph" class="active">Graph</button>
+      <button id="btnTable">Table</button>
+    </div>
+    <input class="search mono" id="target-filter" placeholder="filter targets&hellip;" autocomplete="off">
+    <div class="spacer"></div>
+    <button class="btn ghost" id="tbListener">+ listener</button>
+    <button class="btn emerald" id="tbGenerate">+ payload</button>
+  </div>
+
+  <!-- stage: target graph/table, then the resizable console dock -->
+  <div class="stage">
+    <div class="stagepanel" id="graphPanel">
+      <svg class="graphwrap" id="graphSvg" viewBox="0 0 900 340" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="glegend">
+        <span class="item"><span class="sw" style="border-color:var(--ok)"></span>egress (direct)</span>
+        <span class="item"><span class="sw" style="border-color:var(--gold);border-top-style:solid"></span>pivoted</span>
+        <span class="item"><span class="sw" style="border-color:var(--dead)"></span>dead</span>
+      </div>
+    </div>
+    <div class="stagepanel hidden tblwrap" id="tablePanel">
+      <table class="tgt">
+        <thead><tr><th></th><th>name</th><th>host</th><th>user</th><th>transport</th><th>pid</th><th>arch</th><th>last</th><th>sleep</th></tr></thead>
+        <tbody id="tblBody"></tbody>
+      </table>
+    </div>
+
+    <div class="divider" id="divider" title="drag to resize"></div>
+
+    <div class="dock">
+      <div class="docktabs" id="dockTabs"></div>
+      <div class="dockbody" id="dockBody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== per-agent panel template ===================== -->
+<template id="agent-panel-tpl">
+  <div class="consolepane" data-role="root" style="display:none">
+    <div class="subtabs">
+      <button class="subtab active" data-sub="terminal">terminal</button>
+      <button class="subtab" data-sub="files">files</button>
+      <button class="subtab" data-sub="processes">processes</button>
+      <button class="subtab" data-sub="network">network</button>
+      <button class="subtab" data-sub="screenshot">screenshot</button>
+      <button class="subtab" data-sub="pivots">pivots</button>
+      <button class="subtab" data-sub="info">info</button>
+    </div>
+
+    <div class="subpane active" data-pane="terminal" style="flex-direction:column;background:var(--console-bg)">
+      <div class="term-scroll" data-el="term-scroll"></div>
+      <form class="term-input" data-el="term-form">
+        <span class="dollar">sliver&nbsp;&rsaquo;</span>
+        <input data-el="term-cmd" placeholder="Sliver command &mdash; ls, ps, download, getsystem&hellip; 'help' for all" autocomplete="off">
+        <button class="btn emerald sm" type="submit">run</button>
+      </form>
+    </div>
+
+    <div class="subpane" data-pane="files">
+      <div class="files-bar">
+        <button class="btn ghost sm" data-el="files-up">&#8593; up</button>
+        <button class="btn ghost sm" data-el="files-refresh">&#8635;</button>
+        <input class="path mono" data-el="files-path" readonly>
+        <button class="btn ghost sm" data-el="files-mkdir">+ dir</button>
+        <label class="btn ghost sm upload-btn">&#8593; upload<input type="file" data-el="files-upload"></label>
+      </div>
+      <div class="files-list" data-el="files-list"></div>
+    </div>
+
+    <div class="subpane scroll" data-pane="processes">
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>PID</th><th>PPID</th><th>Owner</th><th>Arch</th><th>Executable</th></tr></thead>
+          <tbody data-el="procs-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="subpane scroll" data-pane="network">
+      <pre class="pre" data-el="net-out"></pre>
+    </div>
+
+    <div class="subpane scroll" data-pane="screenshot">
+      <div class="shotpane">
+        <button class="btn emerald sm" data-el="shot-capture">&#128247; capture desktop</button>
+        <div data-el="shot-img"></div>
+      </div>
+    </div>
+
+    <div class="subpane scroll" data-pane="pivots">
+      <p class="page-sub">Pivot listeners run on this session, letting downstream hosts route through it
+        to reach the Sliver server. Only sessions can host pivot listeners.</p>
+      <div class="section">
+        <h2>Start pivot listener</h2>
+        <div class="card">
+          <div class="grid2">
+            <label class="field"><span class="lbl">Type</span>
+              <select data-el="pivot-type"><option value="tcp">TCP</option><option value="named-pipe">Named Pipe</option></select>
+            </label>
+            <label class="field"><span class="lbl">Bind address</span>
+              <input data-el="pivot-bind" class="mono" placeholder="tcp: 0.0.0.0:9898 &middot; pipe: \\.\pipe\Name">
+            </label>
+          </div>
+          <button class="btn emerald sm" data-el="pivot-start">start pivot</button>
+          <span data-el="pivot-msg" style="margin-left:12px"></span>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Active pivots</h2>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>ID</th><th>Type</th><th>Bind</th><th>Pivots</th><th></th></tr></thead>
+            <tbody data-el="pivot-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="subpane scroll" data-pane="info">
+      <dl class="info" data-el="info-dl"></dl>
+      <div class="section">
+        <h2>Name</h2>
+        <div class="card">
+          <div class="hostport" style="align-items:center;flex-wrap:wrap;gap:8px">
+            <input data-el="info-name" class="mono" style="flex:1;min-width:180px" maxlength="32"
+              placeholder="hostname" autocomplete="off" spellcheck="false">
+            <button class="btn emerald sm" data-el="info-rename">rename</button>
+            <button class="btn ghost sm" data-el="info-rename-reset" title="revert to hostname default">reset</button>
+            <span data-el="info-rename-msg"></span>
+          </div>
+        </div>
+      </div>
+      <div class="section" data-el="info-cadence" style="display:none">
+        <h2>Beacon cadence</h2>
+        <div class="card">
+          <p class="page-sub" data-el="cadence-current" style="margin:0 0 12px"></p>
+          <div class="grid2">
+            <label class="field" style="margin:0"><span class="lbl">Sleep / interval (seconds)</span>
+              <input data-el="cadence-interval" type="number" min="1">
+            </label>
+            <label class="field" style="margin:0"><span class="lbl">Jitter (seconds)</span>
+              <input data-el="cadence-jitter" type="number" min="0">
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:12px">
+            <button class="btn emerald sm" data-el="cadence-save">save cadence</button>
+            <span data-el="cadence-msg"></span>
+          </div>
+        </div>
+      </div>
+      <div class="danger-zone">
+        <span class="lbl">danger zone</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn danger sm" data-el="info-kill">kill agent</button>
+          <button class="btn danger sm" data-el="info-remove" style="display:none">remove from console</button>
+          <span data-el="info-kill-msg"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===================== utility tab panes (single-instance) ===================== -->
+<template id="util-jobs-tpl">
+  <div class="utilpane">
+    <p class="page-sub">Start listeners from the Listeners menu. This table shows every running job.</p>
+    <div class="section">
+      <h2>Active jobs</h2>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Job</th><th>Name</th><th>Protocol</th><th>Port</th><th>Description</th><th></th></tr></thead>
+          <tbody data-el="jobs-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="section" data-el="stale-section" style="display:none">
+      <h2>Stale listeners <span class="pill warn" data-el="stale-count">0</span></h2>
+      <p class="page-sub">Persisted in the Sliver DB with no running job &mdash; usually a listener that failed to
+        restart at boot. It still reserves its port. Remove deletes the stranded DB record.</p>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Job</th><th>Type</th><th>Host</th><th>Port</th><th></th></tr></thead>
+          <tbody data-el="stale-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="util-profiles-tpl">
+  <div class="utilpane">
+    <p class="page-sub">Save a reusable implant configuration on the server. Reference a saved profile from
+      Payloads &rsaquo; Generate Stager to build and serve its full binary to a stager on connect.</p>
+    <form class="limit" data-el="prof-form">
+      <div class="section">
+        <h2>Profile</h2>
+        <div class="card">
+          <label class="field" style="margin:0"><span class="lbl">Name (required, unique)</span>
+            <input data-el="prof-name" class="mono" required placeholder="my-profile">
+          </label>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Target</h2>
+        <div class="card">
+          <div class="grid2">
+            <label class="field"><span class="lbl">OS</span>
+              <select data-el="prof-os"><option>windows</option><option>linux</option><option>darwin</option></select>
+            </label>
+            <label class="field"><span class="lbl">Architecture</span>
+              <select data-el="prof-arch"><option>amd64</option><option>386</option><option>arm64</option></select>
+            </label>
+            <label class="field"><span class="lbl">Format</span>
+              <select data-el="prof-format">
+                <option value="exe">Executable</option><option value="shared">Shared library</option>
+                <option value="shellcode">Shellcode</option><option value="service">Service</option>
+              </select>
+            </label>
+            <label class="field"><span class="lbl">Type</span>
+              <select data-el="prof-type"><option value="session">Session</option><option value="beacon">Beacon</option></select>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <h2>C2 endpoint</h2>
+        <div class="card">
+          <div class="field">
+            <span class="lbl">Type</span>
+            <select data-el="prof-c2-type" style="width:100%">
+              <option value="mtls">mTLS</option><option value="http">HTTP</option>
+              <option value="https">HTTPS</option><option value="named-pipe">Named Pipe</option>
+            </select>
+          </div>
+          <div class="field" data-el="prof-c2-host-field">
+            <span class="lbl">C2 host (pick an interface, or type a hostname)</span>
+            <input data-el="prof-c2-host" class="mono" list="prof-c2-host-list" style="width:100%" placeholder="10.10.14.2 or cdn.example.com">
+            <datalist id="prof-c2-host-list" data-el="prof-c2-host-list"></datalist>
+          </div>
+          <div class="field" data-el="prof-c2-port-field">
+            <span class="lbl">C2 port</span>
+            <input data-el="prof-c2-port" class="mono" type="number" placeholder="8888" style="width:100%">
+          </div>
+          <div class="field" data-el="prof-c2-pipe-field" style="display:none">
+            <span class="lbl">Pipe path</span>
+            <input data-el="prof-c2-pipe" class="mono" placeholder="\\.\pipe\MySliver" style="width:100%">
+          </div>
+        </div>
+      </div>
+      <div class="section" data-el="prof-beacon-section">
+        <h2>Beacon cadence</h2>
+        <div class="card">
+          <div class="grid2">
+            <label class="field"><span class="lbl">Sleep interval (seconds)</span><input data-el="prof-interval" type="number" min="1" value="60"></label>
+            <label class="field"><span class="lbl">Jitter (seconds)</span><input data-el="prof-jitter" type="number" min="0" value="30"></label>
+            <label class="field"><span class="lbl">Reconnect interval (seconds)</span><input data-el="prof-reconnect" type="number" min="1" value="60"></label>
+            <label class="field"><span class="lbl">Max connection errors</span><input data-el="prof-max-errors" type="number" min="1" value="1000"></label>
+            <label class="field"><span class="lbl">Poll timeout (seconds)</span><input data-el="prof-poll" type="number" min="1" value="360"></label>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn emerald" type="submit" data-el="prof-btn">save profile</button>
+        <span data-el="prof-status"></span>
+      </div>
+    </form>
+    <div class="section" style="margin-top:18px">
+      <h2>Saved profiles</h2>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Name</th><th>OS/Arch</th><th>Format</th><th>Type</th><th>C2</th><th></th></tr></thead>
+          <tbody data-el="profiles-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="util-implants-tpl">
+  <div class="utilpane">
+    <p class="page-sub">Every implant previously built on the server (via Generate or a saved profile's stager).</p>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Name</th><th>OS/Arch</th><th>Format</th><th>Type</th><th>C2</th><th>Staged</th><th></th></tr></thead>
+        <tbody data-el="implants-body"></tbody>
+      </table>
+    </div>
+  </div>
+</template>
+
+<template id="util-pivotgraph-tpl">
+  <div class="utilpane">
+    <p class="page-sub">Server-wide view of pivot relationships: each row is a session hosting pivot
+      listeners and how many downstream implants route through it.</p>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Session ID</th><th>Hostname</th><th>Downstream pivots</th></tr></thead>
+        <tbody data-el="pivot-graph-body"></tbody>
+      </table>
+    </div>
+  </div>
+</template>
+
+<template id="util-help-tpl">
+  <div class="utilpane">
+    <p class="page-sub">A quick reference for Sliver's built-in console commands, with the nearest Cobalt
+      Strike equivalent where one exists. Run these from any console tab. Commands and flags vary by
+      version &mdash; <span class="mono">help &lt;command&gt;</span> is always authoritative.</p>
+
+    <div class="section limit">
+      <h2>Coming from Cobalt Strike?</h2>
+      <div class="card">
+        <ul class="help-list">
+          <li><strong>Sessions vs beacons.</strong> A <em>session</em> is interactive/real-time; a
+            <em>beacon</em> checks in on an interval (like a CS beacon). List them with
+            <span class="mono">sessions</span> / <span class="mono">beacons</span>, then
+            <span class="mono">use &lt;id&gt;</span> to task one.</li>
+          <li><strong>Beacon tasks are queued.</strong> Results arrive on the next check-in &mdash; view
+            them with <span class="mono">tasks</span> (CS: the pending/received task view).</li>
+          <li><strong>The Armory is your BOF / .NET store.</strong>
+            <span class="mono">armory install &lt;name&gt;</span> pulls tools like Rubeus, Seatbelt,
+            SharpUp. Run .NET with <span class="mono">execute-assembly</span> and BOFs via
+            <span class="mono">extensions</span>.</li>
+          <li><strong>Opsec.</strong> Prefer <span class="mono">execute</span> /
+            <span class="mono">execute-assembly</span> / extensions over the noisy interactive
+            <span class="mono">shell</span> &mdash; same guidance as CS.</li>
+          <li><strong>Sleep.</strong> Change a beacon's interval/jitter with
+            <span class="mono">reconfig</span> (CS: <span class="mono">sleep</span>).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Sessions &amp; beacons</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">sessions</td><td>List interactive sessions (<span class="mono">-i &lt;id&gt;</span> to interact)</td><td class="mono">sessions</td></tr>
+          <tr><td class="mono">beacons</td><td>List async beacons</td><td>beacon table</td></tr>
+          <tr><td class="mono">use &lt;id&gt;</td><td>Select a session/beacon to task</td><td class="mono">interact</td></tr>
+          <tr><td class="mono">background</td><td>Stop interacting with the current implant</td><td class="mono">back</td></tr>
+          <tr><td class="mono">info</td><td>Details about the selected implant</td><td>right-click &rsaquo; info</td></tr>
+          <tr><td class="mono">tasks</td><td>List a beacon's queued/completed tasks; <span class="mono">tasks fetch &lt;id&gt;</span> for results</td><td>pending tasks</td></tr>
+          <tr><td class="mono">whoami</td><td>Current user &amp; token context</td><td class="mono">getuid</td></tr>
+          <tr><td class="mono">reconfig</td><td>Change beacon interval/jitter, reconnect settings</td><td class="mono">sleep</td></tr>
+          <tr><td class="mono">rename</td><td>Rename the session/beacon</td><td class="mono">note</td></tr>
+          <tr><td class="mono">ping</td><td>Round-trip liveness check to the implant</td><td>&mdash;</td></tr>
+          <tr><td class="mono">close</td><td>Disconnect a session without killing the implant</td><td>&mdash;</td></tr>
+          <tr><td class="mono">kill</td><td>Terminate the implant</td><td class="mono">exit</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Listeners (C2 channels) &amp; jobs</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">mtls</td><td>Start a mutual-TLS listener (Sliver-native, encrypted)</td><td>&mdash;</td></tr>
+          <tr><td class="mono">http</td><td>Start an HTTP C2 listener</td><td>HTTP listener</td></tr>
+          <tr><td class="mono">https</td><td>Start an HTTPS C2 listener</td><td>HTTPS listener</td></tr>
+          <tr><td class="mono">dns</td><td>Start a DNS C2 listener</td><td>DNS beacon</td></tr>
+          <tr><td class="mono">wg</td><td>Start a WireGuard listener</td><td>&mdash;</td></tr>
+          <tr><td class="mono">stage-listener</td><td>Host a staged payload for a stager to pull</td><td>staging</td></tr>
+          <tr><td class="mono">websites</td><td>Host arbitrary files/content over the HTTP(S) C2</td><td>host file / SWD</td></tr>
+          <tr><td class="mono">jobs</td><td>List running listeners; <span class="mono">jobs -k &lt;id&gt;</span> to kill</td><td class="mono">jobs</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Payloads &amp; builds</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">generate</td><td>Build a session implant (exe/shellcode/dll/service/shared-lib) &mdash; <span class="mono">--mtls --http --os --arch --format</span></td><td>Attacks &rsaquo; Packages</td></tr>
+          <tr><td class="mono">generate beacon</td><td>Build a beacon implant (<span class="mono">--seconds --jitter</span>)</td><td>beacon payload</td></tr>
+          <tr><td class="mono">generate stager</td><td>Build a stager for a staged listener</td><td>stager</td></tr>
+          <tr><td class="mono">profiles</td><td>Save &amp; reuse build configs (<span class="mono">profiles new</span> / <span class="mono">generate</span>)</td><td>saved builds</td></tr>
+          <tr><td class="mono">implants</td><td>List previously built implants</td><td>exported artifacts</td></tr>
+          <tr><td class="mono">regenerate &lt;name&gt;</td><td>Rebuild a saved implant byte-for-byte</td><td>&mdash;</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Filesystem</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">ls &middot; cd &middot; pwd &middot; cat</td><td>Browse and read the remote filesystem</td><td>same</td></tr>
+          <tr><td class="mono">download &middot; upload</td><td>Transfer files to/from the implant</td><td class="mono">download &middot; upload</td></tr>
+          <tr><td class="mono">mkdir &middot; rm &middot; mv</td><td>Create / remove / move files &amp; dirs</td><td>same</td></tr>
+          <tr><td class="mono">chmod &middot; chown</td><td>Change permissions / ownership</td><td>&mdash;</td></tr>
+          <tr><td class="mono">chtimes</td><td>Alter file timestamps (timestomp)</td><td class="mono">timestomp</td></tr>
+          <tr><td class="mono">memfiles</td><td>Stage files in memory (anti-forensics)</td><td>&mdash;</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Recon &amp; situational awareness</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">ps</td><td>Process list</td><td class="mono">ps</td></tr>
+          <tr><td class="mono">netstat</td><td>Network connections</td><td class="mono">netstat</td></tr>
+          <tr><td class="mono">ifconfig</td><td>Network interfaces</td><td class="mono">ipconfig</td></tr>
+          <tr><td class="mono">env</td><td>Environment variables</td><td>&mdash;</td></tr>
+          <tr><td class="mono">screenshot</td><td>Capture the desktop</td><td class="mono">screenshot</td></tr>
+          <tr><td class="mono">getprivs</td><td>List the token's privileges (Windows)</td><td>&mdash;</td></tr>
+          <tr><td class="mono">registry</td><td>read / write / list / create / delete registry (Windows)</td><td>via BOF</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Execution &amp; post-exploitation</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">execute</td><td>Run a program/command on the host</td><td class="mono">run &middot; shell</td></tr>
+          <tr><td class="mono">execute-assembly</td><td>Run a .NET assembly in memory</td><td class="mono">execute-assembly</td></tr>
+          <tr><td class="mono">execute-shellcode</td><td>Inject raw shellcode into a process</td><td class="mono">shinject</td></tr>
+          <tr><td class="mono">sideload</td><td>Load &amp; run a shared library/DLL in memory</td><td class="mono">dllload</td></tr>
+          <tr><td class="mono">spawndll</td><td>Reflectively load a DLL into a process</td><td>reflective DLL</td></tr>
+          <tr><td class="mono">shell</td><td>Interactive system shell (noisy &mdash; use sparingly)</td><td class="mono">shell</td></tr>
+          <tr><td class="mono">migrate</td><td>Migrate the implant into another process</td><td class="mono">inject / migrate</td></tr>
+          <tr><td class="mono">procdump</td><td>Dump a process's memory (e.g. lsass)</td><td>via BOF</td></tr>
+          <tr><td class="mono">terminate &lt;pid&gt;</td><td>Kill a process by PID</td><td class="mono">kill</td></tr>
+          <tr><td class="mono">msf &middot; msf-inject</td><td>Deliver / inject a Metasploit payload</td><td>MSF integration</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Privileges &amp; tokens (Windows)</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">getsystem</td><td>Spawn a new session as NT AUTHORITY\SYSTEM</td><td class="mono">getsystem</td></tr>
+          <tr><td class="mono">make-token</td><td>Create a logon token from credentials</td><td class="mono">make_token</td></tr>
+          <tr><td class="mono">impersonate</td><td>Impersonate a logged-on user's token</td><td class="mono">steal_token</td></tr>
+          <tr><td class="mono">rev2self</td><td>Drop impersonation, revert to self</td><td class="mono">rev2self</td></tr>
+          <tr><td class="mono">runas</td><td>Run a command as another user</td><td class="mono">runas</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Pivoting &amp; networking</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">socks5</td><td>Start a SOCKS5 proxy through the implant</td><td class="mono">socks</td></tr>
+          <tr><td class="mono">portfwd</td><td>Forward a local port through the implant to a remote host</td><td>tunnel / portfwd</td></tr>
+          <tr><td class="mono">rportfwd</td><td>Reverse port forward (implant listens, tunnels back)</td><td class="mono">rportfwd</td></tr>
+          <tr><td class="mono">pivots</td><td>Named-pipe (Windows) / TCP pivot listeners to chain implants</td><td>SMB / TCP beacon (link / connect)</td></tr>
+          <tr><td class="mono">wg-portfwd &middot; wg-socks</td><td>WireGuard-based forwards (when using the wg C2)</td><td>&mdash;</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Extensions, aliases &amp; the Armory</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">armory</td><td>Package manager &mdash; <span class="mono">armory</span> (list), <span class="mono">search</span>, <span class="mono">install &lt;name&gt;</span> for .NET aliases &amp; BOF extensions</td><td>BOFs / Aggressor</td></tr>
+          <tr><td class="mono">aliases</td><td>List installed .NET-style aliases (run assemblies by name, e.g. rubeus)</td><td>&mdash;</td></tr>
+          <tr><td class="mono">extensions</td><td>List / <span class="mono">install</span> / <span class="mono">load</span> BOF-style extensions</td><td class="mono">inline-execute (BOF)</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="section">
+      <h2>Loot, data &amp; housekeeping</h2>
+      <div class="tbl-wrap"><table class="tbl help-tbl">
+        <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">loot</td><td>Store/manage collected credentials &amp; files</td><td>Credentials / loot</td></tr>
+          <tr><td class="mono">hosts</td><td>The hosts database (tracked targets)</td><td>Targets</td></tr>
+          <tr><td class="mono">monitor</td><td><span class="mono">monitor start</span> &mdash; watch your implants against threat-intel (VT etc.)</td><td>&mdash;</td></tr>
+          <tr><td class="mono">settings</td><td>Client/console settings</td><td>Preferences</td></tr>
+          <tr><td class="mono">update &middot; version</td><td>Update Sliver / show version</td><td>&mdash;</td></tr>
+          <tr><td class="mono">help &lt;command&gt;</td><td>Built-in help &amp; flags for any command</td><td class="mono">help</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+</template>
+
+<!-- ===================== modal dialogs ===================== -->
+<div class="modal-overlay" id="modalveil" style="display:none">
+
+  <div class="modal-box narrow" id="modalListener">
+    <div class="modal-head" id="mlHead">Start Listener</div>
+    <div class="modal-body form">
+      <label class="field" style="margin:0"><span class="lbl">Type</span>
+        <select id="mlType"><option value="mtls">mTLS</option><option value="http">HTTP</option><option value="https">HTTPS</option></select>
+      </label>
+      <div class="grid2">
+        <label class="field" style="margin:0"><span class="lbl">Bind host (interface → IP)</span>
+          <select id="mlHost" class="mono"></select>
+        </label>
+        <label class="field" style="margin:0"><span class="lbl">Port</span><input id="mlPort" class="mono" placeholder="8888"></label>
+      </div>
+      <label class="field" style="margin:0"><span class="lbl">Domain (HTTP/S only, optional)</span><input id="mlDomain" class="mono" placeholder="example.com"></label>
+      <span id="mlEditNote" class="warn-note" style="display:none"></span>
+      <span id="mlWarn" class="warn-note" style="display:none"></span>
+    </div>
+    <div class="modal-foot"><span class="spacer" id="mlMsg"></span><button class="btn" data-close>Cancel</button><button class="btn emerald" id="mlSave">Start</button></div>
+  </div>
+
+  <div class="modal-box" id="modalGenerate" style="display:none">
+    <div class="modal-head">Generate Payload</div>
+    <div class="modal-body form" style="max-height:60vh">
+      <label class="field" style="margin:0"><span class="lbl">Listener</span>
+        <select id="mgListener"></select>
+      </label>
+      <div class="grid2" id="mgC2HostPortRow">
+        <label class="field" style="margin:0"><span class="lbl">C2 host (auto-filled when known — HTTP/S jobs don't report theirs, verify it)</span>
+          <input id="mgHost" class="mono" list="mgHostList" placeholder="10.10.14.2 or cdn.example.com">
+          <datalist id="mgHostList"></datalist>
+        </label>
+        <label class="field" style="margin:0"><span class="lbl">C2 port</span><input id="mgPort" class="mono" type="number" placeholder="8888"></label>
+      </div>
+      <label class="field" id="mgPipeField" style="display:none;margin:0"><span class="lbl">Pipe path</span><input id="mgPipe" class="mono" placeholder="\\.\pipe\MySliver"></label>
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+      <div class="grid2">
+        <label class="field" style="margin:0"><span class="lbl">Output</span>
+          <select id="mgFormat"><option value="exe">Windows EXE</option><option value="service">Windows Service EXE</option><option value="shared">Windows DLL</option><option value="shellcode">Shellcode</option><option value="process-hollow">Process Hollowing (AES)</option></select>
+        </label>
+        <label class="field" style="margin:0"><span class="lbl">Architecture</span><select id="mgArch"><option value="amd64">x64</option><option value="386">x86</option><option value="arm64">arm64</option></select></label>
+        <label class="field" style="margin:0"><span class="lbl">OS</span><select id="mgOs"><option>windows</option><option>linux</option><option>darwin</option></select></label>
+        <label class="field" style="margin:0"><span class="lbl">Type</span><select id="mgType"><option value="beacon">Beacon</option><option value="session">Session</option></select></label>
+      </div>
+      <div id="mgBeaconSection">
+        <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+        <div class="grid2">
+          <label class="field" style="margin:0"><span class="lbl">Sleep (s)</span><input id="mgInterval" type="number" min="1" value="60"></label>
+          <label class="field" style="margin:0"><span class="lbl">Jitter (s)</span><input id="mgJitter" type="number" min="0" value="30"></label>
+        </div>
+      </div>
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+      <label class="field" style="margin:0"><span class="lbl">Name (optional &mdash; auto if empty)</span><input id="mgName" class="mono" placeholder="auto"></label>
+      <label class="field" style="margin:0"><span class="lbl">Save to directory on bridge host (required)</span>
+        <div style="display:flex;gap:8px">
+          <input id="mgSavedir" class="mono" required placeholder="/var/www/html" style="flex:1">
+          <button type="button" class="btn ghost sm" id="mgBrowse">browse&hellip;</button>
+        </div>
+      </label>
+    </div>
+    <div class="modal-foot"><span class="spacer" id="mgMsg"></span><button class="btn" data-close>Cancel</button><button class="btn emerald" id="mgSave">Generate</button></div>
+  </div>
+
+  <div class="modal-box narrow" id="modalStager" style="display:none">
+    <div class="modal-head">Generate Stager</div>
+    <div class="modal-body form">
+      <label class="field" style="margin:0"><span class="lbl">Profile</span><select id="msProfile" class="mono"></select></label>
+      <div class="grid2">
+        <label class="field" style="margin:0"><span class="lbl">Bind host (interface &rarr; IP)</span><select id="msHost" class="mono"></select></label>
+        <label class="field" style="margin:0"><span class="lbl">Port</span><input id="msPort" class="mono" type="number" placeholder="9898"></label>
+      </div>
+      <label class="field" style="margin:0"><span class="lbl">Compression (optional)</span>
+        <select id="msCompress"><option value="">none</option><option value="zlib">zlib</option><option value="gzip">gzip</option><option value="deflate9">deflate</option></select>
+      </label>
+      <div class="grid2">
+        <label class="field" style="margin:0"><span class="lbl">AES key (optional)</span><input id="msAesKey" class="mono" placeholder="16/24/32 bytes"></label>
+        <label class="field" style="margin:0"><span class="lbl">RC4 key (optional)</span><input id="msRc4Key" class="mono" placeholder="1-256 bytes"></label>
+      </div>
+    </div>
+    <div class="modal-foot"><span class="spacer" id="msMsg"></span><button class="btn" data-close>Cancel</button><button class="btn emerald" id="msSave">Start</button></div>
+  </div>
+
+  <div class="modal-box narrow" id="modalAbout" style="display:none">
+    <div class="modal-head">About / Connection</div>
+    <div class="modal-body form" id="aboutBody"></div>
+    <div class="modal-foot"><span class="spacer"></span><button class="btn" data-close>Close</button></div>
+  </div>
+</div>
+
+<!-- directory browser (bridge host filesystem — Generate's save dir) -->
+<div class="modal-overlay" id="dirbrowser" style="display:none">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span>Choose a directory on the bridge host</span>
+      <button type="button" class="icon-btn" id="dirbrowser-close" title="close">&times;</button>
+    </div>
+    <div class="modal-path mono" id="dirbrowser-path"></div>
+    <div class="modal-body" id="dirbrowser-list"></div>
+    <div class="modal-foot">
+      <button type="button" class="btn ghost sm" id="dirbrowser-up">&#8593; up</button>
+      <div class="spacer"></div>
+      <span id="dirbrowser-msg" class="muted mono" style="font-size:12px"></span>
+      <button type="button" class="btn emerald sm" id="dirbrowser-select">select this directory</button>
+    </div>
+  </div>
+</div>
+
+<!-- context menu (right-click a target row/node, or blank graph canvas) -->
+<div class="ctxmenu" id="ctxmenu" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

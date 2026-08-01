@@ -1,0 +1,1765 @@
+'use strict';
+
+/* Sliver Web GUI front-end — Cobalt Strike-style operator console: a menu bar,
+   a target graph/table, and a resizable tabbed console dock. Talks to the Go
+   bridge's REST + SSE API. Every action maps to a real, native Sliver command
+   or RPC — nothing here is decorative. */
+
+// ---------- tiny helpers ----------
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const elIn = (root, name) => root.querySelector(`[data-el="${name}"]`);
+function el(tag, cls, txt) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (txt != null) e.textContent = txt;
+  return e;
+}
+function esc(s) {
+  return String(s ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function api(method, path, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) {
+    opt.headers['Content-Type'] = 'application/json';
+    opt.body = JSON.stringify(body);
+  }
+  const r = await fetch(path, opt);
+  const txt = await r.text();
+  let data;
+  try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function ago(unixSec) {
+  if (!unixSec) return '—';
+  const d = Math.floor(Date.now() / 1000 - unixSec);
+  if (d < 0) return 'in ' + fmtDur(-d);
+  if (d < 5) return 'just now';
+  return fmtDur(d) + ' ago';
+}
+function fmtDur(s) {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  return Math.floor(s / 86400) + 'd';
+}
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+function joinPath(base, name) {
+  const sep = base.includes('\\') ? '\\' : '/';
+  if (base.endsWith(sep)) return base + name;
+  return base + sep + name;
+}
+function parentPath(p) {
+  const sep = p.includes('\\') ? '\\' : '/';
+  const parts = p.split(sep).filter(Boolean);
+  parts.pop();
+  if (sep === '/') return '/' + parts.join('/');
+  return parts.join('\\') + '\\';
+}
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = el('a');
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function b64ToBlob(b64) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr]);
+}
+function readFileAsBase64(file) {
+  return file.arrayBuffer().then((buf) => {
+    let bin = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  });
+}
+
+// ---------- global state ----------
+const STATE = {
+  agents: {},   // id -> { a, kind: session|beacon|dead, isBeacon }
+  order: [],
+  interfaces: [], // [{name, ip, version, up}]
+  filter: '',
+  panels: {},   // agentId -> { cwd }
+  nodePos: {},  // agentId -> {x,y} — manually dragged graph node positions
+};
+
+// =====================================================================
+// interfaces (host combo/select population)
+// =====================================================================
+function fillIfaceSelect(sel, opts) {
+  opts = opts || {};
+  const prev = sel.value;
+  sel.innerHTML = '';
+  if (opts.allInterfaces) sel.appendChild(new Option('0.0.0.0 · all interfaces', '0.0.0.0'));
+  if (opts.none) sel.appendChild(new Option('— none —', ''));
+  for (const i of STATE.interfaces) {
+    if (opts.v4only && i.version !== 4) continue;
+    const label = `${i.ip} · ${i.name}${i.version === 6 ? ' (v6)' : ''}${i.up ? '' : ' [down]'}`;
+    sel.appendChild(new Option(label, i.ip));
+  }
+  if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+  else if (opts.default != null) {
+    const wanted = Array.from(sel.options).find((o) => o.value === opts.default);
+    if (wanted) sel.value = opts.default;
+  }
+}
+// Fill a <datalist> paired with a text <input> — the host field is then both a
+// pick-from-list dropdown (interface → IP) *and* a free-text box (hostnames,
+// redirectors, domain-fronted names all work).
+function fillDatalist(dl, opts) {
+  opts = opts || {};
+  dl.innerHTML = '';
+  if (opts.allInterfaces) dl.appendChild(new Option('0.0.0.0 · all interfaces', '0.0.0.0'));
+  for (const i of STATE.interfaces) {
+    if (opts.v4only && i.version !== 4) continue;
+    dl.appendChild(new Option(`${i.ip} · ${i.name}${i.version === 6 ? ' (v6)' : ''}${i.up ? '' : ' [down]'}`, i.ip));
+  }
+}
+function preferredV4() {
+  const isVirtual = (n) => /^(lo|docker|br-|veth|virbr|vmnet|tun|tap|utun|zt)/i.test(n);
+  const v4 = STATE.interfaces.filter((i) => i.version === 4 && i.ip !== '127.0.0.1');
+  const preferred = v4.find((i) => !isVirtual(i.name)) || v4[0];
+  return preferred ? preferred.ip : '';
+}
+async function loadInterfaces() {
+  try { STATE.interfaces = await api('GET', '/api/interfaces'); } catch { STATE.interfaces = []; }
+  fillIfaceSelect($('#mlHost'), { allInterfaces: true, v4only: true, default: '0.0.0.0' });
+  fillDatalist($('#mgHostList'), { v4only: true });
+  if (!$('#mgHost').value) $('#mgHost').value = preferredV4();
+  fillIfaceSelect($('#msHost'), { allInterfaces: true, v4only: true, default: '0.0.0.0' });
+  updateBindWarning();
+}
+
+// VPN/tunnel bind guard (see Listeners modal) — a listener bound to a VPN
+// interface's IP can fail to restore at boot (interface not up yet), and the
+// stale DB record then blocks that port for every protocol until cleared.
+const VPN_IFACE = /^(tun|tap|wg|ppp|utun|ligolo)/i;
+function ifaceForIP(ip) {
+  const i = STATE.interfaces.find((x) => x.ip === ip);
+  return i ? i.name : '';
+}
+function isVPNBind(ip) {
+  return !!ip && ip !== '0.0.0.0' && VPN_IFACE.test(ifaceForIP(ip));
+}
+function updateBindWarning() {
+  const note = $('#mlWarn');
+  const ip = $('#mlHost').value.trim();
+  if (!isVPNBind(ip)) { note.style.display = 'none'; return; }
+  const iface = ifaceForIP(ip);
+  note.style.display = '';
+  note.innerHTML = `<b>${esc(iface)}</b> is a VPN/tunnel interface. It may not exist yet when the Sliver ` +
+    `server starts at boot, so a listener bound to <b>${esc(ip)}</b> will fail to restore and strand this ` +
+    `port until the leftover record is removed. Prefer <b>0.0.0.0</b> — it already covers ${esc(iface)}.`;
+}
+$('#mlHost').addEventListener('input', updateBindWarning);
+
+// =====================================================================
+// menu bar (Sliver | View | Payloads | Listeners | Help)
+// =====================================================================
+const menubar = $('#menubar');
+function closeMenus() { $$('.mbtn.open', menubar).forEach((m) => m.classList.remove('open')); }
+$$('.mbtn', menubar).forEach((m) => {
+  m.querySelector(':scope > button').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = m.classList.contains('open');
+    closeMenus();
+    if (!wasOpen) m.classList.add('open');
+  });
+});
+document.addEventListener('click', closeMenus);
+$$('.ddown button', menubar).forEach((b) => {
+  b.addEventListener('click', () => {
+    const act = b.dataset.act;
+    if (act === 'view-table') $('#btnTable').click();
+    else if (act === 'view-graph') $('#btnGraph').click();
+    else if (act === 'open-tab') openUtilTab(b.dataset.tab);
+    else if (act === 'modal') {
+      if (b.dataset.modal === 'listener') resetListenerModal();
+      openModal(b.dataset.modal);
+    }
+    else if (act === 'about') openAbout();
+    closeMenus();
+  });
+});
+
+// =====================================================================
+// toolbar: graph/table toggle, target filter
+// =====================================================================
+const btnGraph = $('#btnGraph'), btnTable = $('#btnTable');
+const graphPanel = $('#graphPanel'), tablePanel = $('#tablePanel');
+btnGraph.onclick = () => { btnGraph.classList.add('active'); btnTable.classList.remove('active'); graphPanel.classList.remove('hidden'); tablePanel.classList.add('hidden'); };
+btnTable.onclick = () => { btnTable.classList.add('active'); btnGraph.classList.remove('active'); tablePanel.classList.remove('hidden'); graphPanel.classList.add('hidden'); };
+$('#target-filter').addEventListener('input', (e) => { STATE.filter = e.target.value.toLowerCase(); renderTable(); renderGraph(); });
+function matchesFilter(id) {
+  if (!STATE.filter) return true;
+  const a = STATE.agents[id].a;
+  const hay = `${a.Name} ${a.Username} ${a.Hostname} ${a.OS} ${a.RemoteAddress}`.toLowerCase();
+  return hay.includes(STATE.filter);
+}
+
+// =====================================================================
+// agent identity helpers (ported as-is)
+// =====================================================================
+let RENAMED = {};
+try { RENAMED = JSON.parse(localStorage.getItem('sliver.renamed')) || {}; } catch { RENAMED = {}; }
+function markRenamed(id, renamed) {
+  if (renamed) RENAMED[id] = true; else delete RENAMED[id];
+  try { localStorage.setItem('sliver.renamed', JSON.stringify(RENAMED)); } catch {}
+}
+function domainOf(a) {
+  const u = a.Username || '';
+  const bs = u.indexOf('\\');
+  if (bs <= 0) return '';
+  const d = u.slice(0, bs);
+  if (!d || d === '.' || d.toLowerCase() === (a.Hostname || '').toLowerCase()) return '';
+  return d;
+}
+function hostLabel(a) {
+  const host = a.Hostname || '';
+  const dom = domainOf(a);
+  if (host && dom) return host + '.' + dom;
+  return host || a.Name || a.ID.slice(0, 8);
+}
+function agentName(a) {
+  if (RENAMED[a.ID] && a.Name) return a.Name;
+  return hostLabel(a);
+}
+function remoteAddr(a) {
+  const r = a.RemoteAddress || '';
+  const m = r.match(/^tcp\((.+)\)->(.+)$/);
+  return m ? `${m[2]} (via ${m[1]})` : r;
+}
+// privLevel approximates Cobalt Strike's medium/high integrity icon from the
+// one signal we actually have — the reported username — since Sliver's
+// session/beacon list doesn't carry an explicit privilege-level field.
+function privLevel(a) {
+  const u = (a.Username || '').toLowerCase();
+  if (/(^|\\)(system|root)$/.test(u) || u.startsWith('nt authority\\')) return 'high';
+  return 'medium';
+}
+function monitorColor(rec) {
+  if (rec.kind === 'dead') return 'var(--dead)';
+  return privLevel(rec.a) === 'high' ? 'var(--priv-high)' : 'var(--priv-med)';
+}
+function sleepLabel(rec) {
+  if (rec.kind === 'dead' || !rec.isBeacon) return '—';
+  const secs = (ns) => Math.max(0, Math.round((ns || 0) / 1e9));
+  return `${secs(rec.a.Interval)}s / ${secs(rec.a.Jitter)}s`;
+}
+// removeAgentRecord clears one agent's record from the console: a beacon (dead
+// or alive) is deleted via RmBeacon; a session has no such "just forget it"
+// RPC, so a dead session is cleared via Kill instead — Sliver's Kill handler
+// removes the session from its in-memory table unconditionally, even when the
+// underlying connection is already gone.
+async function removeAgentRecord(id, rec) {
+  if (rec.isBeacon) return api('POST', `/api/target/${id}/remove`);
+  return api('POST', `/api/target/${id}/kill`);
+}
+
+// =====================================================================
+// loading sessions/beacons + rendering the stage (graph / table)
+// =====================================================================
+async function loadAgents() {
+  try {
+    const [sessions, beacons] = await Promise.all([api('GET', '/api/sessions'), api('GET', '/api/beacons')]);
+    const map = {}; const order = [];
+    for (const a of sessions || []) { map[a.ID] = { a, kind: a.IsDead ? 'dead' : 'session', isBeacon: false }; order.push(a.ID); }
+    for (const a of beacons || []) { map[a.ID] = { a, kind: a.IsDead ? 'dead' : 'beacon', isBeacon: true }; order.push(a.ID); }
+    STATE.agents = map; STATE.order = order;
+    renderChips();
+    renderTable();
+    await renderGraph();
+    for (const id of Object.keys(STATE.panels)) {
+      const pane = ensurePane(id);
+      if (pane && $(`.subtab[data-sub="info"].active`, pane)) renderInfo(id, pane);
+    }
+  } catch (e) {
+    $('#tblBody').innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`;
+  }
+}
+function renderChips() {
+  const n = (kind) => STATE.order.filter((id) => STATE.agents[id].kind === kind).length;
+  $('#chip-sessions').textContent = n('session');
+  $('#chip-beacons').textContent = n('beacon');
+  $('#chip-dead').textContent = n('dead');
+}
+
+function renderTable() {
+  const tbody = $('#tblBody');
+  const ids = STATE.order.filter(matchesFilter)
+    .slice().sort((x, y) => (STATE.agents[y].a.LastCheckin || 0) - (STATE.agents[x].a.LastCheckin || 0));
+  if (!ids.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = '';
+  for (const id of ids) {
+    const rec = STATE.agents[id]; const a = rec.a;
+    const tr = el('tr');
+    if (rec.kind === 'dead') tr.className = 'is-dead';
+    tr.innerHTML =
+      `<td><span class="monitor" style="background:${monitorColor(rec)}"></span></td>` +
+      `<td>${esc(agentName(a))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
+      `<td>${esc(a.Transport)}</td><td class="num">${a.PID}</td><td class="num">${esc(a.Arch)}</td>` +
+      `<td class="num">${esc(ago(a.LastCheckin))}</td><td class="num">${esc(sleepLabel(rec))}</td>`;
+    tr.addEventListener('click', () => openAgentConsole(id));
+    tr.addEventListener('contextmenu', (e) => { e.preventDefault(); showAgentMenu(id, e.clientX, e.clientY); });
+    tbody.appendChild(tr);
+  }
+}
+
+// ----- graph: real agents + real pivot-chain edges (from /api/pivots) -----
+function svgEl(tag, attrs) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+// Walk the PivotGraph tree, recording childID -> hostingSessionID for every
+// downstream implant so the graph can draw a solid pivoted edge instead of a
+// dashed direct-egress one.
+function flattenPivotParents(graph) {
+  const parentOf = {};
+  function walk(node, parentId) {
+    if (parentId) parentOf[node.ID] = parentId;
+    for (const child of node.Children || []) walk(child, node.ID);
+  }
+  for (const root of graph?.Children || []) walk(root, null);
+  return parentOf;
+}
+function layoutGraph(ids, parentOf) {
+  const children = {}; const roots = [];
+  for (const id of ids) {
+    const p = parentOf[id];
+    if (p && STATE.agents[p]) (children[p] = children[p] || []).push(id);
+    else roots.push(id);
+  }
+  const positions = {};
+  let yCounter = 0;
+  const Y_STEP = 52, X_STEP = 190, X0 = 240;
+  function place(id, depth) {
+    const kids = (children[id] || []).filter((k) => k !== id);
+    if (!kids.length) {
+      positions[id] = { x: X0 + depth * X_STEP, y: yCounter * Y_STEP + 36 };
+      yCounter++;
+      return positions[id].y;
+    }
+    const ys = kids.map((k) => place(k, depth + 1));
+    const y = ys.reduce((s, v) => s + v, 0) / ys.length;
+    positions[id] = { x: X0 + depth * X_STEP, y };
+    return y;
+  }
+  for (const r of roots) place(r, 0);
+  return positions;
+}
+// GRAPH holds live element references so a drag can update just the moved
+// node + its connected edges, without a full re-layout/re-render.
+const GRAPH = { positions: {}, parentOf: {}, ids: [], nodeEls: {}, edgeEls: {} };
+const ROOT_ID = '__root__';
+let ROOT = { x: 60, y: 170 };
+try { const saved = JSON.parse(localStorage.getItem('sliver.rootPos')); if (saved) ROOT = saved; } catch {}
+function saveRootPos() { try { localStorage.setItem('sliver.rootPos', JSON.stringify(ROOT)); } catch {} }
+// Root-anchored edges are every direct-egress node's edge (no pivot parent),
+// which isn't tracked in GRAPH.parentOf — so moving TEAMSERVER needs its own
+// edge-refresh instead of the generic per-node updateEdgesFor().
+function updateEdgesForRoot() {
+  for (const otherId of GRAPH.ids) {
+    if (!GRAPH.parentOf[otherId]) {
+      const edge = GRAPH.edgeEls[otherId];
+      if (edge) { edge.setAttribute('x1', ROOT.x); edge.setAttribute('y1', ROOT.y); }
+    }
+  }
+}
+// Keeps any manual link (line + its label) touching `id` attached while it's
+// being dragged — links can connect any two node types, so this is shared
+// across the agent/root/custom-node drag paths rather than duplicated in each.
+function updateCustomLinksFor(id) {
+  for (const linkId in CUSTOM_LINKS) {
+    const link = CUSTOM_LINKS[linkId];
+    if (link.from !== id && link.to !== id) continue;
+    const from = GRAPH.positions[link.from], to = GRAPH.positions[link.to];
+    if (!from || !to) continue;
+    const line = GRAPH.linkEls[linkId];
+    if (line) { line.setAttribute('x1', from.x); line.setAttribute('y1', from.y); line.setAttribute('x2', to.x); line.setAttribute('y2', to.y); }
+    const label = GRAPH.linkLabelEls[linkId];
+    if (label) { label.setAttribute('x', (from.x + to.x) / 2); label.setAttribute('y', (from.y + to.y) / 2 - 5); }
+  }
+}
+// svgPoint converts a mouse/pointer event's client coordinates into the SVG's
+// own viewBox coordinate space, accounting for however the browser has
+// scaled/letterboxed the element — needed since the graph panel can be any
+// pixel size.
+function svgPoint(svg, e) {
+  const pt = svg.createSVGPoint();
+  pt.x = e.clientX; pt.y = e.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+// Recompute and redraw just the edges touching `id` (its own edge to its
+// parent, plus any edges from nodes pivoted through it) after a drag. Custom
+// annotation nodes have no edges, so this is a no-op for them.
+function updateEdgesFor(id) {
+  const p = GRAPH.positions[id];
+  const ownEdge = GRAPH.edgeEls[id];
+  if (ownEdge) { ownEdge.setAttribute('x2', p.x); ownEdge.setAttribute('y2', p.y); }
+  for (const otherId of GRAPH.ids) {
+    if (GRAPH.parentOf[otherId] === id) {
+      const edge = GRAPH.edgeEls[otherId];
+      if (edge) { edge.setAttribute('x1', p.x); edge.setAttribute('y1', p.y); }
+    }
+  }
+}
+// Node dragging uses native Pointer Capture: once a node captures the pointer
+// on pointerdown, the browser guarantees pointermove/pointerup keep firing on
+// that same element for the rest of the gesture — no window-level listeners,
+// no "the cursor moved off the small SVG node and the drag died" edge cases.
+const DRAG = { id: null, offset: { x: 0, y: 0 }, moved: false };
+function wireNodeDrag(svg, g, id) {
+  g.style.touchAction = 'none';
+  g.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    if (LINKING.from) { completeLink(id); return; }
+    g.setPointerCapture(e.pointerId);
+    DRAG.id = id; DRAG.moved = false;
+    const pt = svgPoint(svg, e);
+    DRAG.offset.x = pt.x - GRAPH.positions[id].x;
+    DRAG.offset.y = pt.y - GRAPH.positions[id].y;
+  });
+  g.addEventListener('pointermove', (e) => {
+    if (DRAG.id !== id) return;
+    DRAG.moved = true;
+    const pt = svgPoint(svg, e);
+    const pos = { x: pt.x - DRAG.offset.x, y: pt.y - DRAG.offset.y };
+    GRAPH.positions[id] = pos;
+    if (id === ROOT_ID) { ROOT.x = pos.x; ROOT.y = pos.y; }
+    else if (STATE.agents[id]) STATE.nodePos[id] = pos;
+    else if (CUSTOM_NODES[id]) { CUSTOM_NODES[id].x = pos.x; CUSTOM_NODES[id].y = pos.y; }
+    g.setAttribute('transform', `translate(${pos.x},${pos.y})`);
+    if (id === ROOT_ID) updateEdgesForRoot(); else updateEdgesFor(id);
+    updateCustomLinksFor(id);
+  });
+  g.addEventListener('pointerup', (e) => {
+    if (DRAG.id !== id) return;
+    g.releasePointerCapture(e.pointerId);
+    const wasMoved = DRAG.moved;
+    DRAG.id = null;
+    if (!wasMoved) { if (STATE.agents[id]) openAgentConsole(id); }
+    else if (id === ROOT_ID) saveRootPos();
+    else if (CUSTOM_NODES[id]) saveCustomNodes();
+  });
+}
+
+// ----- custom annotation nodes (operator notes on the graph — not real
+// agents; e.g. marking a known-but-not-yet-compromised host) -----
+let CUSTOM_NODES = {};
+try { CUSTOM_NODES = JSON.parse(localStorage.getItem('sliver.customNodes')) || {}; } catch { CUSTOM_NODES = {}; }
+function saveCustomNodes() { try { localStorage.setItem('sliver.customNodes', JSON.stringify(CUSTOM_NODES)); } catch {} }
+function addCustomNode(x, y) {
+  const label = prompt('Node label:');
+  if (!label || !label.trim()) return;
+  const id = 'custom-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  CUSTOM_NODES[id] = { label: label.trim(), x, y };
+  saveCustomNodes();
+  renderGraph();
+}
+function renameCustomNode(id) {
+  const node = CUSTOM_NODES[id]; if (!node) return;
+  const name = prompt('Rename node:', node.label);
+  if (!name || !name.trim()) return;
+  node.label = name.trim();
+  saveCustomNodes();
+  renderGraph();
+}
+function deleteCustomNode(id) {
+  if (!confirm('Delete this node?')) return;
+  delete CUSTOM_NODES[id];
+  saveCustomNodes();
+  renderGraph();
+}
+function showCustomNodeMenu(id, x, y) {
+  if (LINKING.from) cancelLinking();
+  ctx.innerHTML = `<button data-a="rename">Rename&hellip;</button><button data-a="link">Link to&hellip;</button><hr><button class="danger" data-a="delete">Delete</button>`;
+  $$('button[data-a]', ctx).forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (b.dataset.a === 'rename') renameCustomNode(id);
+    else if (b.dataset.a === 'link') startLinking(id);
+    else if (b.dataset.a === 'delete') deleteCustomNode(id);
+    hideMenu();
+  }));
+  placeMenu(x, y);
+}
+function showRootMenu(x, y) {
+  if (LINKING.from) cancelLinking();
+  ctx.innerHTML = `<button data-a="link">Link to&hellip;</button>`;
+  $$('button[data-a]', ctx).forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (b.dataset.a === 'link') startLinking(ROOT_ID);
+    hideMenu();
+  }));
+  placeMenu(x, y);
+}
+
+// ----- manual links (operator-drawn, named connections between any two
+// nodes — real agents, custom nodes, or TEAMSERVER — for annotating attack
+// paths/relationships the auto pivot-chain edges don't cover) -----
+let CUSTOM_LINKS = {};
+try { CUSTOM_LINKS = JSON.parse(localStorage.getItem('sliver.customLinks')) || {}; } catch { CUSTOM_LINKS = {}; }
+function saveCustomLinks() { try { localStorage.setItem('sliver.customLinks', JSON.stringify(CUSTOM_LINKS)); } catch {} }
+function linkEndpointExists(id) { return id === ROOT_ID || !!STATE.agents[id] || !!CUSTOM_NODES[id]; }
+
+const LINKING = { from: null, tempLine: null };
+function updateLinkingCursor(on) { $('#graphPanel').classList.toggle('linking', on); }
+function cancelLinking() {
+  LINKING.from = null;
+  if (LINKING.tempLine) { LINKING.tempLine.remove(); LINKING.tempLine = null; }
+  updateLinkingCursor(false);
+}
+function startLinking(fromId) {
+  LINKING.from = fromId;
+  updateLinkingCursor(true);
+}
+function completeLink(toId) {
+  const fromId = LINKING.from;
+  cancelLinking();
+  if (!fromId || fromId === toId) return;
+  const label = prompt('Label for this link (optional):') || '';
+  const id = 'link-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  CUSTOM_LINKS[id] = { from: fromId, to: toId, label: label.trim() };
+  saveCustomLinks();
+  renderGraph();
+}
+function editLinkLabel(id) {
+  const link = CUSTOM_LINKS[id]; if (!link) return;
+  const label = prompt('Link label:', link.label || '');
+  if (label == null) return;
+  link.label = label.trim();
+  saveCustomLinks();
+  renderGraph();
+}
+function deleteLink(id) {
+  if (!confirm('Delete this link?')) return;
+  delete CUSTOM_LINKS[id];
+  saveCustomLinks();
+  renderGraph();
+}
+function showLinkMenu(id, x, y) {
+  if (LINKING.from) cancelLinking();
+  ctx.innerHTML = `<button data-a="edit">Edit&hellip;</button><hr><button class="danger" data-a="delete">Delete</button>`;
+  $$('button[data-a]', ctx).forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (b.dataset.a === 'edit') editLinkLabel(id);
+    else if (b.dataset.a === 'delete') deleteLink(id);
+    hideMenu();
+  }));
+  placeMenu(x, y);
+}
+// A dashed preview line follows the cursor from the origin node while linking
+// is in progress; wired once (the SVG element itself persists across
+// re-renders — only its children get replaced).
+$('#graphSvg').addEventListener('mousemove', (e) => {
+  const svg = $('#graphSvg');
+  if (!LINKING.from) { if (LINKING.tempLine) { LINKING.tempLine.remove(); LINKING.tempLine = null; } return; }
+  const from = GRAPH.positions[LINKING.from];
+  if (!from) return;
+  const pt = svgPoint(svg, e);
+  if (!LINKING.tempLine) { LINKING.tempLine = svgEl('line', { class: 'edge linking-preview' }); svg.appendChild(LINKING.tempLine); }
+  LINKING.tempLine.setAttribute('x1', from.x); LINKING.tempLine.setAttribute('y1', from.y);
+  LINKING.tempLine.setAttribute('x2', pt.x); LINKING.tempLine.setAttribute('y2', pt.y);
+});
+$('#graphPanel').addEventListener('click', (e) => {
+  if (LINKING.from && !e.target.closest('.gnode')) cancelLinking();
+});
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && LINKING.from) cancelLinking(); });
+function showCanvasMenu(svg, x, y) {
+  if (LINKING.from) { cancelLinking(); return; }
+  const pt = svgPoint(svg, { clientX: x, clientY: y });
+  ctx.innerHTML = `<button data-a="add">Add Node Here&hellip;</button><hr><button data-a="refresh">Refresh</button>`;
+  $$('button[data-a]', ctx).forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (b.dataset.a === 'add') addCustomNode(pt.x, pt.y);
+    else if (b.dataset.a === 'refresh') loadAgents();
+    hideMenu();
+  }));
+  placeMenu(x, y);
+}
+
+async function renderGraph() {
+  const svg = $('#graphSvg');
+  let parentOf = {};
+  try { parentOf = flattenPivotParents(await api('GET', '/api/pivots')); } catch {}
+  const ids = STATE.order.filter(matchesFilter);
+  const computed = layoutGraph(ids, parentOf);
+  // A node the operator has manually dragged keeps its dragged position;
+  // everything else uses the auto tree layout.
+  const positions = {};
+  for (const id of ids) positions[id] = STATE.nodePos[id] || computed[id];
+  GRAPH.positions = positions; GRAPH.parentOf = parentOf; GRAPH.ids = ids;
+  GRAPH.nodeEls = {}; GRAPH.edgeEls = {}; GRAPH.linkEls = {}; GRAPH.linkLabelEls = {};
+  // Every node type's position must be known before any edge/link is drawn.
+  GRAPH.positions[ROOT_ID] = ROOT;
+  for (const id in CUSTOM_NODES) GRAPH.positions[id] = { x: CUSTOM_NODES[id].x, y: CUSTOM_NODES[id].y };
+
+  svg.innerHTML = '';
+  const customYs = Object.values(CUSTOM_NODES).map((n) => n.y + 20);
+  const maxY = Math.max(170, ...Object.values(positions).map((p) => p.y + 36), ...Object.values(computed).map((p) => p.y + 36), ...customYs);
+  svg.setAttribute('viewBox', `0 0 900 ${maxY + 20}`);
+
+  for (const id of ids) {
+    const rec = STATE.agents[id];
+    const p = positions[id];
+    const parentPos = (parentOf[id] && positions[parentOf[id]]) || ROOT;
+    const isPivoted = !!(parentOf[id] && STATE.agents[parentOf[id]]);
+    const color = rec.kind === 'dead' ? 'var(--dead)' : (isPivoted ? 'var(--gold)' : 'var(--ok)');
+    const line = svgEl('line', { x1: parentPos.x, y1: parentPos.y, x2: p.x, y2: p.y, class: 'edge ' + (isPivoted ? '' : 'egress'), stroke: color });
+    GRAPH.edgeEls[id] = line;
+    svg.appendChild(line);
+  }
+
+  // Manual links: drawn once endpoints exist; a link whose endpoint was
+  // actually deleted (not just hidden by the filter box) is pruned instead of
+  // lingering invisibly forever.
+  let prunedLinks = false;
+  for (const linkId in CUSTOM_LINKS) {
+    const link = CUSTOM_LINKS[linkId];
+    if (!linkEndpointExists(link.from) || !linkEndpointExists(link.to)) { delete CUSTOM_LINKS[linkId]; prunedLinks = true; continue; }
+    const from = GRAPH.positions[link.from], to = GRAPH.positions[link.to];
+    if (!from || !to) continue; // filtered out of view right now — keep the link, just don't draw it
+    const line = svgEl('line', { x1: from.x, y1: from.y, x2: to.x, y2: to.y, class: 'edge custom-link' });
+    line.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); showLinkMenu(linkId, e.clientX, e.clientY); });
+    GRAPH.linkEls[linkId] = line;
+    svg.appendChild(line);
+    if (link.label) {
+      const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2;
+      const label = svgEl('text', { x: mx, y: my - 5, 'text-anchor': 'middle', class: 'link-label' });
+      label.textContent = link.label;
+      label.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); showLinkMenu(linkId, e.clientX, e.clientY); });
+      GRAPH.linkLabelEls[linkId] = label;
+      svg.appendChild(label);
+    }
+  }
+  if (prunedLinks) saveCustomLinks();
+
+  const rootG = svgEl('g', { class: 'gnode root', transform: `translate(${ROOT.x},${ROOT.y})` });
+  rootG.innerHTML = `<rect x="-34" y="-16" width="68" height="32" rx="3" fill="#2c2e32" stroke="#1c1d20"/>
+    <text y="4" text-anchor="middle" class="name" style="fill:var(--graph-ink)">TEAMSERVER</text>`;
+  rootG.addEventListener('contextmenu', (e) => { e.preventDefault(); showRootMenu(e.clientX, e.clientY); });
+  wireNodeDrag(svg, rootG, ROOT_ID);
+  GRAPH.nodeEls[ROOT_ID] = rootG;
+  svg.appendChild(rootG);
+  for (const id of ids) {
+    const rec = STATE.agents[id]; const a = rec.a; const p = positions[id];
+    const color = monitorColor(rec);
+    const g = svgEl('g', { class: 'gnode' + (rec.kind === 'dead' ? ' dead' : ''), transform: `translate(${p.x},${p.y})` });
+    g.innerHTML =
+      `<circle r="9" fill="${rec.kind === 'dead' ? '#3a3d42' : color}" fill-opacity="${rec.kind === 'dead' ? '1' : '0.24'}" stroke="${color}" stroke-width="2"/>
+       <circle r="3" fill="${color}"/>
+       <text class="name" y="-16" text-anchor="middle">${esc(agentName(a))}</text>
+       <text class="sub" y="22" text-anchor="middle">${esc(a.Hostname)}</text>`;
+    g.addEventListener('contextmenu', (e) => { e.preventDefault(); showAgentMenu(id, e.clientX, e.clientY); });
+    wireNodeDrag(svg, g, id);
+    GRAPH.nodeEls[id] = g;
+    svg.appendChild(g);
+  }
+  for (const id in CUSTOM_NODES) {
+    const node = CUSTOM_NODES[id];
+    const g = svgEl('g', { class: 'gnode custom', transform: `translate(${node.x},${node.y})` });
+    g.innerHTML =
+      `<rect x="-34" y="-12" width="68" height="24" rx="4" fill="var(--panel-raised)" fill-opacity="0.92" stroke="var(--ink-faint)" stroke-dasharray="3 2"/>
+       <text class="name" y="4" text-anchor="middle" style="fill:var(--ink)">${esc(node.label)}</text>`;
+    g.addEventListener('contextmenu', (e) => { e.preventDefault(); showCustomNodeMenu(id, e.clientX, e.clientY); });
+    wireNodeDrag(svg, g, id);
+    GRAPH.nodeEls[id] = g;
+    svg.appendChild(g);
+  }
+}
+$('#graphPanel').addEventListener('contextmenu', (e) => {
+  if (e.target.closest('.gnode')) return;
+  e.preventDefault();
+  showCanvasMenu($('#graphSvg'), e.clientX, e.clientY);
+});
+
+// =====================================================================
+// context menu (Interact / Access / Explore / Pivoting / Remove / Kill)
+// =====================================================================
+const ctx = $('#ctxmenu');
+function placeMenu(x, y) {
+  ctx.hidden = false; ctx.style.left = '0px'; ctx.style.top = '0px';
+  const r = ctx.getBoundingClientRect();
+  ctx.style.left = Math.min(x, window.innerWidth - r.width - 8) + 'px';
+  ctx.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px';
+}
+function hideMenu() { ctx.hidden = true; }
+document.addEventListener('click', hideMenu);
+document.addEventListener('scroll', hideMenu, true);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMenu(); });
+
+function showAgentMenu(id, x, y) {
+  if (LINKING.from) cancelLinking();
+  const rec = STATE.agents[id]; if (!rec) return;
+  const dead = rec.kind === 'dead';
+  const canPivot = rec.kind === 'session';
+  ctx.innerHTML = `
+    <button data-a="interact" ${dead ? 'disabled' : ''}>Interact</button>
+    <button data-a="rename">Rename&hellip;</button>
+    <button data-a="link">Link to&hellip;</button>
+    <div class="cx-item">
+      <button ${dead ? 'disabled' : ''}>Access <span class="arrow">&#9656;</span></button>
+      <div class="submenu">
+        <button data-a="getsystem" ${dead ? 'disabled' : ''}>Elevate <span class="kbd">getsystem</span></button>
+        <button data-a="maketoken" ${dead ? 'disabled' : ''}>Make Token&hellip;</button>
+        <button data-a="impersonate" ${dead ? 'disabled' : ''}>Impersonate Token&hellip;</button>
+      </div>
+    </div>
+    <div class="cx-item">
+      <button ${dead ? 'disabled' : ''}>Explore <span class="arrow">&#9656;</span></button>
+      <div class="submenu">
+        <button data-a="files" ${dead ? 'disabled' : ''}>File Browser</button>
+        <button data-a="processes" ${dead ? 'disabled' : ''}>Process List</button>
+        <button data-a="network" ${dead ? 'disabled' : ''}>Network</button>
+        <button data-a="screenshot" ${dead ? 'disabled' : ''}>Screenshot</button>
+      </div>
+    </div>
+    <div class="cx-item">
+      <button ${dead || !canPivot ? 'disabled' : ''}>Pivoting <span class="arrow">&#9656;</span></button>
+      <div class="submenu"><button data-a="pivots" ${dead || !canPivot ? 'disabled' : ''}>Start Pivot Listener&hellip;</button></div>
+    </div>
+    <hr>
+    <button data-a="remove">Remove</button>
+    <button class="danger" data-a="kill">Kill</button>`;
+  $$('button[data-a]', ctx).forEach((b) => b.addEventListener('click', (e) => {
+    if (b.disabled) return;
+    e.stopPropagation(); runAgentAction(id, b.dataset.a); hideMenu();
+  }));
+  placeMenu(x, y);
+}
+async function runAgentAction(id, action) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  switch (action) {
+    case 'interact': openAgentConsole(id, 'terminal'); break;
+    case 'rename': renameAgentDirect(id); break;
+    case 'link': startLinking(id); break;
+    case 'getsystem': openAgentConsole(id, 'terminal'); runInPanel(id, 'getsystem'); break;
+    case 'maketoken': {
+      const args = prompt('make-token <DOMAIN\\user> <password>');
+      if (args) { openAgentConsole(id, 'terminal'); runInPanel(id, 'make-token ' + args); }
+      break;
+    }
+    case 'impersonate': {
+      const user = prompt('impersonate <DOMAIN\\user>');
+      if (user) { openAgentConsole(id, 'terminal'); runInPanel(id, 'impersonate ' + user); }
+      break;
+    }
+    case 'files': openAgentConsole(id, 'files'); break;
+    case 'processes': openAgentConsole(id, 'processes'); break;
+    case 'network': openAgentConsole(id, 'network'); break;
+    case 'screenshot': openAgentConsole(id, 'screenshot'); break;
+    case 'pivots': openAgentConsole(id, 'pivots'); break;
+    case 'remove':
+    case 'kill': {
+      const verb = action === 'kill' ? 'Kill' : 'Remove';
+      if (!confirm(`${verb} ${agentName(rec.a)}?`)) return;
+      try {
+        if (action === 'kill') await api('POST', `/api/target/${id}/kill`);
+        else await removeAgentRecord(id, rec);
+        closeTabDock(id);
+        loadAgents();
+      } catch (e) { alert(e.message); }
+      break;
+    }
+  }
+}
+
+// =====================================================================
+// dock tab framework (Event Log + per-agent panels + utility panels)
+// =====================================================================
+const dockTabs = $('#dockTabs');
+const dockBody = $('#dockBody');
+
+function addTab(id, label, dotColor, closable) {
+  const tab = el('button', 'dtab');
+  tab.dataset.tab = id;
+  tab.innerHTML = (dotColor ? `<span class="dot" style="background:${dotColor}"></span>` : '') +
+    `<span class="tab-label">${esc(label)}</span>` + (closable ? '<span class="x">&times;</span>' : '');
+  tab.addEventListener('click', (e) => { if (e.target.classList.contains('x')) { closeTabDock(id); return; } activateTab(id); });
+  dockTabs.appendChild(tab);
+  return tab;
+}
+function activateTab(id) {
+  $$('.dtab', dockTabs).forEach((t) => t.classList.toggle('active', t.dataset.tab === id));
+  $$('.dpane', dockBody).forEach((p) => p.classList.toggle('active', p.dataset.tab === id));
+}
+function closeTabDock(id) {
+  const wasActive = dockTabs.querySelector(`.dtab[data-tab="${id}"]`)?.classList.contains('active');
+  dockTabs.querySelector(`.dtab[data-tab="${id}"]`)?.remove();
+  ensurePane(id)?.remove();
+  delete STATE.panels[id];
+  if (wasActive) activateTab('log');
+}
+function ensurePane(id) { return dockBody.querySelector(`[data-tab="${id}"]`); }
+
+// ----- resizable divider -----
+const divider = $('#divider');
+const dock = $('.dock');
+let dragging = false, startY = 0, startH = 0;
+divider.addEventListener('mousedown', (e) => { dragging = true; startY = e.clientY; startH = dock.getBoundingClientRect().height; document.body.style.cursor = 'row-resize'; e.preventDefault(); });
+window.addEventListener('mousemove', (e) => { if (!dragging) return; dock.style.height = Math.min(Math.max(startH + (startY - e.clientY), 140), window.innerHeight * 0.8) + 'px'; });
+window.addEventListener('mouseup', () => { dragging = false; document.body.style.cursor = ''; });
+
+// =====================================================================
+// native Sliver console — shared by per-agent Interact tabs and the
+// server-scope Sliver Console. Drives console.go's one-shot sliver-client
+// invocation, so every native command works (getsystem, hashdump, armory…).
+// =====================================================================
+function pushConsoleRow(scroll, entry) {
+  const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+  const row = el('div', 'cmd-row');
+  const line = el('div', 'cmd-line');
+  line.innerHTML = `<span class="dollar">sliver &rsaquo;</span><span class="txt">${esc(entry.cmd)}</span>` +
+    (entry.pending ? '<span class="queued">running&hellip;</span>' : '');
+  row.appendChild(line);
+  if (entry.out) { const pre = el('pre', 'cmd-out'); pre.textContent = entry.out; row.appendChild(pre); }
+  if (entry.err) { const pre = el('pre', 'cmd-out err'); pre.textContent = entry.err; row.appendChild(pre); }
+  scroll.appendChild(row);
+  if (atBottom) scroll.scrollTop = scroll.scrollHeight;
+  return row;
+}
+async function runTermCommand(id, line, scroll) {
+  line = line.trim();
+  if (!line) return;
+  const entry = { cmd: line, pending: true };
+  const row = pushConsoleRow(scroll, entry);
+  const cmd = line.split(/\s+/)[0].toLowerCase();
+  if (cmd === 'clear') { scroll.innerHTML = ''; row.remove(); return; }
+  if (cmd === 'help' || cmd === '?') {
+    row.remove();
+    pushConsoleRow(scroll, {
+      cmd: line,
+      out: 'Native Sliver console — type any sliver-client command.\n\n' +
+        'Common: sessions, beacons, use <id>, info, jobs, generate, ls, cd, ps,\n' +
+        'download, upload, execute, execute-assembly, screenshot, kill, getsystem,\n' +
+        'make-token, impersonate, procdump, hashdump, registry, execute-shellcode,\n' +
+        'sideload, migrate, armory, profiles, loot, hosts, pivots.\n\n' +
+        'Type "help <command>" or "<command> --help" for details.',
+    });
+    return;
+  }
+  try {
+    const endpoint = id ? `/api/target/${id}/console` : '/api/console';
+    const r = await api('POST', endpoint, { cmd: line });
+    row.remove();
+    pushConsoleRow(scroll, { cmd: line, out: r.output || '(no output)' });
+  } catch (err) {
+    row.remove();
+    pushConsoleRow(scroll, { cmd: line, err: err.message });
+  }
+}
+// runInPanel drives a command from the context menu into an already-open
+// agent console tab (Access > Elevate, etc.) as if the operator typed it.
+function runInPanel(id, line) {
+  const pane = ensurePane(id);
+  if (!pane) return;
+  const scroll = elIn(pane, 'term-scroll');
+  runTermCommand(id, line, scroll);
+}
+
+// Server-scope console ("Sliver Console") — same mechanism, id=''.
+function openScriptConsole() {
+  const key = 'console';
+  let pane = ensurePane(key);
+  if (!pane) {
+    pane = el('div', 'dpane consolepane');
+    pane.dataset.tab = key;
+    pane.innerHTML = `<div class="term-scroll"></div>
+      <form class="term-input"><span class="dollar">sliver &rsaquo;</span>
+        <input placeholder="server-scope command — armory, profiles, jobs, generate…" autocomplete="off">
+        <button class="btn emerald sm" type="submit">run</button></form>`;
+    const scroll = pane.querySelector('.term-scroll');
+    const form = pane.querySelector('form');
+    const input = pane.querySelector('input');
+    form.addEventListener('submit', (e) => { e.preventDefault(); const line = input.value.trim(); if (!line) return; input.value = ''; runTermCommand('', line, scroll); });
+    dockBody.appendChild(pane);
+    addTab(key, 'Sliver Console', null, true);
+  }
+  activateTab(key);
+}
+
+// =====================================================================
+// per-agent panel (Interact tab): terminal / files / processes / network /
+// screenshot / pivots / info — cloned from <template id="agent-panel-tpl">.
+// =====================================================================
+function openAgentConsole(id, subtab) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  let pane = ensurePane(id);
+  if (!pane) {
+    pane = buildAgentPanel(id, rec);
+    dockBody.appendChild(pane);
+    addTab(id, agentName(rec.a), rec.kind === 'beacon' ? 'var(--priv-med)' : (rec.kind === 'dead' ? 'var(--dead)' : 'var(--ok)'), true);
+  }
+  activateTab(id);
+  switchSubtab(pane, id, subtab || (rec.kind === 'dead' ? 'info' : 'terminal'));
+}
+
+function buildAgentPanel(id, rec) {
+  const tpl = $('#agent-panel-tpl');
+  const frag = tpl.content.cloneNode(true);
+  const root = frag.querySelector('[data-role="root"]');
+  root.classList.add('dpane', 'consolepane');
+  root.dataset.tab = id;
+  root.style.display = '';
+  STATE.panels[id] = { cwd: '/' };
+
+  $$('.subtab', root).forEach((t) => t.onclick = () => switchSubtab(root, id, t.dataset.sub));
+
+  // ---- terminal ----
+  const scroll = elIn(root, 'term-scroll');
+  const form = elIn(root, 'term-form');
+  const cmdInput = elIn(root, 'term-cmd');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const line = cmdInput.value.trim();
+    if (!line) return;
+    cmdInput.value = '';
+    runTermCommand(id, line, scroll);
+  });
+
+  // ---- files ----
+  elIn(root, 'files-up').onclick = () => listDir(id, root, parentPath(STATE.panels[id].cwd));
+  elIn(root, 'files-refresh').onclick = () => listDir(id, root, STATE.panels[id].cwd);
+  elIn(root, 'files-mkdir').onclick = async () => {
+    const name = prompt('New directory name:');
+    if (!name) return;
+    try { await api('POST', `/api/target/${id}/mkdir`, { path: joinPath(STATE.panels[id].cwd, name) }); listDir(id, root, STATE.panels[id].cwd); }
+    catch (e) { alert(e.message); }
+  };
+  elIn(root, 'files-upload').addEventListener('change', async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    try {
+      const b64 = await readFileAsBase64(file);
+      await api('POST', `/api/target/${id}/upload`, { path: joinPath(STATE.panels[id].cwd, file.name), data: b64 });
+      listDir(id, root, STATE.panels[id].cwd);
+    } catch (e) { alert(e.message); }
+    ev.target.value = '';
+  });
+
+  // ---- screenshot ----
+  elIn(root, 'shot-capture').onclick = () => captureScreenshot(id, root);
+
+  // ---- pivots ----
+  elIn(root, 'pivot-start').onclick = async () => {
+    const type = elIn(root, 'pivot-type').value;
+    const bind = elIn(root, 'pivot-bind').value.trim();
+    if (!bind && type === 'tcp') { alert('TCP: specify bind address (e.g. 0.0.0.0:9898)'); return; }
+    const msg = elIn(root, 'pivot-msg');
+    msg.textContent = 'starting…';
+    try {
+      await api('POST', `/api/target/${id}/pivots`, { type, bind });
+      msg.textContent = 'started';
+      elIn(root, 'pivot-bind').value = '';
+      setTimeout(() => { msg.textContent = ''; loadPivots(id, root); }, 1000);
+    } catch (e) { msg.textContent = 'error: ' + e.message; }
+  };
+
+  // ---- info ----
+  elIn(root, 'info-rename').onclick = () => renameAgent(id, root);
+  elIn(root, 'info-rename-reset').onclick = () => resetAgentName(id, root);
+  elIn(root, 'cadence-save').onclick = () => saveCadence(id, root);
+  elIn(root, 'info-kill').onclick = () => killAgent(id, root);
+  elIn(root, 'info-remove').onclick = () => removeAgentFromInfo(id, root);
+
+  return root;
+}
+
+function switchSubtab(root, id, name) {
+  $$('.subtab', root).forEach((t) => t.classList.toggle('active', t.dataset.sub === name));
+  $$('.subpane', root).forEach((p) => p.classList.toggle('active', p.dataset.pane === name));
+  if (name === 'files') fileRefresh(id, root);
+  else if (name === 'processes') loadProcs(id, root);
+  else if (name === 'network') loadNet(id, root);
+  else if (name === 'pivots') loadPivots(id, root);
+  else if (name === 'info') renderInfo(id, root);
+  else if (name === 'terminal') elIn(root, 'term-cmd').focus();
+}
+
+// ----- files -----
+function fileRefresh(id, root) { listDir(id, root, STATE.panels[id].cwd); }
+async function listDir(id, root, path) {
+  const list = elIn(root, 'files-list');
+  list.innerHTML = '<div class="side-empty">loading…</div>';
+  try {
+    const r = await api('POST', `/api/target/${id}/ls`, { path });
+    STATE.panels[id].cwd = r.Path || path;
+    elIn(root, 'files-path').value = STATE.panels[id].cwd;
+    list.innerHTML = '';
+    const files = (r.Files || []).filter((f) => f.Name !== '.').sort((a, b) => (b.IsDir - a.IsDir) || a.Name.localeCompare(b.Name));
+    if (!files.length) { list.innerHTML = '<div class="side-empty">empty directory</div>'; return; }
+    for (const f of files) {
+      const row = el('div', 'file-row');
+      const nm = el('span', 'fn ' + (f.IsDir ? 'dir' : 'file'), (f.IsDir ? '📁 ' : '📄 ') + f.Name);
+      const full = joinPath(STATE.panels[id].cwd, f.Name);
+      nm.onclick = f.IsDir ? () => listDir(id, root, full) : () => downloadFile(id, full, f.Name);
+      row.appendChild(nm);
+      row.appendChild(el('span', 'sz', f.IsDir ? '' : fmtSize(f.Size)));
+      row.appendChild(el('span', 'md', f.Mode || ''));
+      const acts = el('span', 'acts');
+      if (!f.IsDir) {
+        const dl = el('button', 'btn ghost sm', '⬇');
+        dl.onclick = (e) => { e.stopPropagation(); downloadFile(id, full, f.Name); };
+        acts.appendChild(dl);
+      }
+      const rm = el('button', 'btn ghost sm', '🗑');
+      rm.onclick = (e) => { e.stopPropagation(); rmFile(id, root, full, f.IsDir); };
+      acts.appendChild(rm);
+      row.appendChild(acts);
+      list.appendChild(row);
+    }
+  } catch (e) { list.innerHTML = `<div class="side-empty">${esc(e.message)}</div>`; }
+}
+async function downloadFile(id, path, name) {
+  try {
+    const r = await api('POST', `/api/target/${id}/download`, { path });
+    if (!r.exists) { alert('file not found'); return; }
+    saveBlob(b64ToBlob(r.data), name);
+  } catch (e) { alert(e.message); }
+}
+async function rmFile(id, root, path, isDir) {
+  if (!confirm('Delete ' + path + '?')) return;
+  try { await api('POST', `/api/target/${id}/rm`, { path, recursive: isDir }); fileRefresh(id, root); }
+  catch (e) { alert(e.message); }
+}
+
+// ----- processes -----
+async function loadProcs(id, root) {
+  const body = elIn(root, 'procs-body');
+  body.innerHTML = '<tr><td colspan="5" class="empty">loading…</td></tr>';
+  try {
+    const r = await api('GET', `/api/target/${id}/ps`);
+    body.innerHTML = '';
+    const procs = (r.Processes || []).slice().sort((a, b) => a.Pid - b.Pid);
+    if (!procs.length) { body.innerHTML = '<tr><td colspan="5" class="empty">no processes</td></tr>'; return; }
+    for (const p of procs) {
+      const tr = el('tr');
+      tr.innerHTML = `<td>${p.Pid}</td><td>${p.Ppid}</td><td>${esc(p.Owner)}</td><td>${esc(p.Architecture)}</td><td>${esc(p.Executable)}</td>`;
+      body.appendChild(tr);
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`; }
+}
+
+// ----- network -----
+async function loadNet(id, root) {
+  const out = elIn(root, 'net-out');
+  out.textContent = 'loading…';
+  try {
+    const [ifc, ns] = await Promise.all([
+      api('GET', `/api/target/${id}/ifconfig`).catch(() => null),
+      api('GET', `/api/target/${id}/netstat`).catch(() => null),
+    ]);
+    let s = '';
+    if (ifc && ifc.NetInterfaces) {
+      s += '── Interfaces ──\n';
+      for (const i of ifc.NetInterfaces) s += `${i.Name}  ${(i.IPAddresses || []).join(', ')}\n`;
+    }
+    if (ns && ns.Entries) {
+      s += '\n── Connections ──\n';
+      for (const e of ns.Entries) s += `${e.Protocol}\t${e.LocalAddr?.Ip}:${e.LocalAddr?.Port}\t${e.RemoteAddr?.Ip}:${e.RemoteAddr?.Port}\t${e.SkState}\n`;
+    }
+    out.textContent = s || 'no data';
+  } catch (e) { out.textContent = e.message; }
+}
+
+// ----- screenshot (dedicated typed endpoint — the native console can't
+// stream binary image data back through a text transcript) -----
+async function captureScreenshot(id, root) {
+  const wrap = elIn(root, 'shot-img');
+  wrap.textContent = 'capturing…';
+  try {
+    const r = await api('GET', `/api/target/${id}/screenshot`);
+    if (!r.data) { wrap.textContent = 'no image data'; return; }
+    wrap.innerHTML = `<img src="data:image/png;base64,${r.data}">`;
+  } catch (e) { wrap.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+// ----- pivots (per-session) -----
+async function loadPivots(id, root) {
+  const body = elIn(root, 'pivot-body');
+  body.innerHTML = '<tr><td colspan="5" class="muted">loading…</td></tr>';
+  try {
+    const pivots = await api('GET', `/api/target/${id}/pivots`);
+    if (!pivots || !pivots.length) { body.innerHTML = '<tr><td colspan="5" class="muted">no active pivot listeners</td></tr>'; return; }
+    body.innerHTML = '';
+    for (const p of pivots) {
+      const row = el('tr');
+      row.innerHTML =
+        `<td class="mono">${p.ID}</td><td>${p.Type === 0 ? 'TCP' : p.Type === 2 ? 'Named Pipe' : 'UDP'}</td>` +
+        `<td class="mono">${p.BindAddress || '—'}</td><td>${(p.Pivots || []).length} downstream</td><td></td>`;
+      const stop = el('button', 'btn danger xs', 'stop');
+      stop.onclick = async () => {
+        if (!confirm(`Stop pivot ${p.ID}?`)) return;
+        try { await api('DELETE', `/api/target/${id}/pivots/${p.ID}`); loadPivots(id, root); } catch (e) { alert(e.message); }
+      };
+      row.lastElementChild.appendChild(stop);
+      body.appendChild(row);
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="5" class="err">${esc(e.message)}</td></tr>`; }
+}
+
+// ----- info: metadata, rename, beacon cadence, kill/remove -----
+function renderInfo(id, root) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  const a = rec.a;
+  const rows = [
+    ['type', rec.kind], ['agent id', a.ID, true], ['name', a.Name], ['user', a.Username],
+    ['hostname', a.Hostname], ['domain', domainOf(a)], ['os / arch', `${a.OS}/${a.Arch}`],
+    ['remote address', remoteAddr(a), true], ['transport', a.Transport], ['pid', a.PID],
+    ['version', a.Version], ['last check-in', ago(a.LastCheckin)],
+  ];
+  const dl = elIn(root, 'info-dl');
+  dl.innerHTML = '';
+  for (const [k, v, mono] of rows) {
+    const div = el('div');
+    div.appendChild(el('dt', null, k));
+    div.appendChild(el('dd', mono ? 'mono' : null, v == null || v === '' ? '—' : String(v)));
+    dl.appendChild(div);
+  }
+  const nameInput = elIn(root, 'info-name');
+  if (nameInput.dataset.shownFor !== a.ID) {
+    nameInput.dataset.shownFor = a.ID;
+    nameInput.value = RENAMED[a.ID] ? (a.Name || '') : '';
+    elIn(root, 'info-rename-msg').textContent = '';
+  }
+  nameInput.placeholder = hostLabel(a);
+  elIn(root, 'info-rename-reset').style.display = RENAMED[a.ID] ? '' : 'none';
+
+  const removable = rec.isBeacon || rec.kind === 'dead';
+  elIn(root, 'info-remove').style.display = removable ? '' : 'none';
+
+  const cad = elIn(root, 'info-cadence');
+  if (rec.kind === 'beacon') {
+    const secs = (ns) => Math.max(0, Math.round((ns || 0) / 1e9));
+    const iv = secs(a.Interval), jt = secs(a.Jitter);
+    elIn(root, 'cadence-interval').value = iv;
+    elIn(root, 'cadence-jitter').value = jt;
+    elIn(root, 'cadence-current').innerHTML = `Currently <b>${iv}s</b> sleep, <b>${jt}s</b> jitter &middot; next check-in in ${iv}&ndash;${iv + jt}s.`;
+    elIn(root, 'cadence-msg').textContent = '';
+    cad.style.display = '';
+  } else cad.style.display = 'none';
+}
+// renameAgentDirect is the graph/table context-menu fast path — a plain
+// prompt(), for when the operator doesn't want to open the full Interact tab
+// just to rename something. Same validation and API call as the Info tab's
+// rename form.
+async function renameAgentDirect(id) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  const name = prompt('Rename agent:', agentName(rec.a));
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  if (!/^[A-Za-z0-9._-]{1,32}$/.test(trimmed) || /^\.\.?/.test(trimmed)) { alert('letters, digits, .-_ only (max 32)'); return; }
+  try {
+    await api('POST', `/api/target/${id}/rename`, { name: trimmed });
+    markRenamed(id, true);
+    updateTabLabel(id, rec);
+    loadAgents();
+  } catch (e) { alert(e.message); }
+}
+async function renameAgent(id, root) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  const msg = elIn(root, 'info-rename-msg');
+  const name = elIn(root, 'info-name').value.trim();
+  if (!name) { msg.className = 'err'; msg.textContent = ' enter a name (or use reset)'; return; }
+  if (!/^[A-Za-z0-9._-]{1,32}$/.test(name) || /^\.\.?/.test(name)) { msg.className = 'err'; msg.textContent = ' letters, digits, .-_ only (max 32)'; return; }
+  msg.className = 'muted mono'; msg.textContent = ' renaming…';
+  try {
+    await api('POST', `/api/target/${id}/rename`, { name });
+    markRenamed(id, true);
+    msg.className = 'ok'; msg.textContent = ' renamed';
+    updateTabLabel(id, rec);
+    loadAgents();
+  } catch (e) { msg.className = 'err'; msg.textContent = ' ' + e.message; }
+}
+async function resetAgentName(id, root) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  const host = rec.a.Hostname;
+  const msg = elIn(root, 'info-rename-msg');
+  const validHost = host && /^[A-Za-z0-9._-]{1,32}$/.test(host) && !/^\.\.?/.test(host);
+  msg.className = 'muted mono'; msg.textContent = ' resetting…';
+  try {
+    if (validHost) await api('POST', `/api/target/${id}/rename`, { name: host });
+    markRenamed(id, false);
+    elIn(root, 'info-name').value = '';
+    msg.className = 'ok'; msg.textContent = ' reset to hostname';
+    updateTabLabel(id, rec);
+    loadAgents();
+  } catch (e) { msg.className = 'err'; msg.textContent = ' ' + e.message; }
+}
+function updateTabLabel(id, rec) {
+  const tab = dockTabs.querySelector(`.dtab[data-tab="${id}"] .tab-label`);
+  if (tab) tab.textContent = agentName(rec.a);
+}
+async function saveCadence(id, root) {
+  const interval = parseInt(elIn(root, 'cadence-interval').value, 10);
+  const jitter = parseInt(elIn(root, 'cadence-jitter').value, 10);
+  const msg = elIn(root, 'cadence-msg');
+  if (!(interval >= 1)) { msg.className = 'err'; msg.textContent = 'sleep must be ≥ 1s'; return; }
+  if (!(jitter >= 0)) { msg.className = 'err'; msg.textContent = 'jitter must be ≥ 0s'; return; }
+  msg.className = 'muted mono'; msg.textContent = 'saving…';
+  try {
+    await api('POST', `/api/target/${id}/reconfigure`, { interval, jitter });
+    msg.className = 'ok'; msg.textContent = 'saved — applies on next check-in';
+    loadAgents();
+  } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
+}
+async function killAgent(id, root) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  if (!confirm(`Kill agent ${agentName(rec.a)}?`)) return;
+  const msg = elIn(root, 'info-kill-msg');
+  msg.className = 'muted mono'; msg.textContent = ' killing…';
+  try {
+    await api('POST', `/api/target/${id}/kill`);
+    msg.className = 'ok'; msg.textContent = ' killed';
+    loadAgents();
+  } catch (e) { msg.className = 'err'; msg.textContent = ' ' + e.message; }
+}
+async function removeAgentFromInfo(id, root) {
+  const rec = STATE.agents[id]; if (!rec) return;
+  if (!confirm(`Remove ${agentName(rec.a)} from the console? (does not signal the implant)`)) return;
+  const msg = elIn(root, 'info-kill-msg');
+  msg.className = 'muted mono'; msg.textContent = ' removing…';
+  try {
+    await removeAgentRecord(id, rec);
+    msg.className = 'ok'; msg.textContent = ' removed';
+    closeTabDock(id);
+    loadAgents();
+  } catch (e) { msg.className = 'err'; msg.textContent = ' ' + e.message; }
+}
+
+// =====================================================================
+// utility tabs: Event Log / Sliver Console / Proxy Pivots / Profiles /
+// Implants / Manage Listeners / Help
+// =====================================================================
+function openUtilTab(key) {
+  if (key === 'console') { openScriptConsole(); return; }
+  let pane = ensurePane(key);
+  if (!pane) {
+    const tpl = $(`#util-${key}-tpl`);
+    const label = { log: 'Event Log', jobs: 'Listeners', profiles: 'Profiles', implants: 'Implants', pivotgraph: 'Proxy Pivots', help: 'Help' }[key];
+    if (tpl) {
+      const frag = tpl.content.cloneNode(true);
+      pane = frag.firstElementChild;
+    } else {
+      pane = el('div', 'utilpane');
+    }
+    pane.classList.add('dpane');
+    pane.dataset.tab = key;
+    dockBody.appendChild(pane);
+    addTab(key, label, null, key !== 'log');
+    if (key === 'jobs') initJobsPane(pane);
+    else if (key === 'profiles') initProfilesPane(pane);
+    else if (key === 'implants') initImplantsPane(pane);
+    else if (key === 'pivotgraph') initPivotGraphPane(pane);
+  }
+  activateTab(key);
+  if (key === 'jobs') loadJobs(pane);
+  else if (key === 'profiles') loadProfiles(pane);
+  else if (key === 'implants') loadImplants(pane);
+  else if (key === 'pivotgraph') loadPivotGraphTable(pane);
+}
+
+// ----- Event Log (pinned) -----
+let LOG_PANE;
+function initEventLog() {
+  LOG_PANE = el('div', 'dpane logpane active');
+  LOG_PANE.dataset.tab = 'log';
+  dockBody.appendChild(LOG_PANE);
+  addTab('log', 'Event Log', null, false);
+}
+function logEvent(ev) {
+  let cls = '';
+  if (/connected/i.test(ev.type)) cls = 'connect';
+  else if (/disconnected/i.test(ev.type)) cls = 'disconnect';
+  else if (/job/i.test(ev.type)) cls = 'job';
+  const who = ev.session ? ` ${ev.session.Name}@${ev.session.Hostname}` : ev.job ? ` ${ev.job.Name}:${ev.job.Port}` : '';
+  const div = el('div', 'logline ' + cls);
+  div.innerHTML = `<span class="t">${new Date().toLocaleTimeString()}</span><span>${esc(ev.type)}${esc(who)}</span>`;
+  LOG_PANE.appendChild(div);
+  LOG_PANE.scrollTop = LOG_PANE.scrollHeight;
+  while (LOG_PANE.children.length > 300) LOG_PANE.removeChild(LOG_PANE.firstChild);
+}
+function startEvents() {
+  const es = new EventSource('/api/events');
+  es.onmessage = (m) => {
+    let ev; try { ev = JSON.parse(m.data); } catch { return; }
+    logEvent(ev);
+    if (/session|beacon/i.test(ev.type)) loadAgents();
+    if (/job/i.test(ev.type)) { const p = ensurePane('jobs'); if (p) loadJobs(p); }
+  };
+  es.onerror = () => {};
+}
+
+// ----- Manage Listeners (jobs + stale detection) -----
+function initJobsPane(pane) {
+  // no persistent wiring needed beyond load; buttons are built per-row
+}
+async function loadJobs(pane) {
+  const body = elIn(pane, 'jobs-body');
+  try {
+    const jobs = await api('GET', '/api/jobs');
+    body.innerHTML = '';
+    if (!jobs || !jobs.length) { body.innerHTML = '<tr><td colspan="6" class="empty">no active listeners</td></tr>'; }
+    else {
+      for (const j of jobs) {
+        const tr = el('tr');
+        tr.innerHTML = `<td>${j.ID}</td><td>${esc(j.Name)}</td><td>${esc(j.Protocol)}</td><td>${j.Port}</td><td>${esc(j.Description)}</td><td></td>`;
+        if (['mtls', 'http', 'https'].includes(j.Name)) {
+          const editBtn = el('button', 'btn ghost sm', 'edit');
+          editBtn.style.marginRight = '4px';
+          editBtn.onclick = () => openEditListener(j);
+          tr.lastElementChild.appendChild(editBtn);
+        }
+        const stop = el('button', 'btn danger sm', 'stop');
+        stop.onclick = async () => { try { await api('DELETE', '/api/jobs/' + j.ID); loadJobs(pane); } catch (e) { alert(e.message); } };
+        tr.lastElementChild.appendChild(stop);
+        body.appendChild(tr);
+      }
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="6" class="empty">${esc(e.message)}</td></tr>`; }
+  loadStale(pane);
+}
+async function loadStale(pane) {
+  const section = elIn(pane, 'stale-section');
+  const body = elIn(pane, 'stale-body');
+  let stale;
+  try { stale = await api('GET', '/api/jobs/stale'); } catch { section.style.display = 'none'; return; }
+  if (!stale || !stale.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  elIn(pane, 'stale-count').textContent = stale.length;
+  body.innerHTML = '';
+  for (const s of stale) {
+    const tr = el('tr');
+    tr.innerHTML = `<td>${s.job_id}</td><td>${esc(s.type)}</td><td class="mono">${esc(s.host || '—')}</td><td>${s.port}</td><td></td>`;
+    const rm = el('button', 'btn danger sm', 'remove');
+    rm.onclick = async () => {
+      if (!confirm(`Remove stale listener record (job ${s.job_id})?`)) return;
+      try { await api('DELETE', '/api/jobs/stale/' + s.job_id); loadJobs(pane); } catch (e) { alert(e.message); }
+    };
+    tr.lastElementChild.appendChild(rm);
+    body.appendChild(tr);
+  }
+}
+
+// ----- Profiles (Payloads > Implant Profiles) -----
+const OUTPUT_FORMAT_NAME = { 0: 'shared', 1: 'shellcode', 2: 'exe', 3: 'service' };
+function fmtC2(cfg) {
+  if (!cfg) return '—';
+  const urls = (cfg.C2 || []).map((c) => c.URL);
+  return urls.length ? urls.join(', ') : '—';
+}
+function wireC2Combo(pane, prefix) {
+  const typeSel = elIn(pane, `${prefix}-c2-type`);
+  const update = () => {
+    const isPipe = typeSel.value === 'named-pipe';
+    elIn(pane, `${prefix}-c2-host-field`).style.display = isPipe ? 'none' : '';
+    elIn(pane, `${prefix}-c2-port-field`).style.display = isPipe ? 'none' : '';
+    elIn(pane, `${prefix}-c2-pipe-field`).style.display = isPipe ? '' : 'none';
+  };
+  typeSel.addEventListener('change', update);
+  update();
+}
+function readC2Combo(pane, prefix) {
+  const type = elIn(pane, `${prefix}-c2-type`).value;
+  if (type === 'named-pipe') return { C2Type: type, C2Host: elIn(pane, `${prefix}-c2-pipe`).value.trim(), C2Port: 0 };
+  return { C2Type: type, C2Host: elIn(pane, `${prefix}-c2-host`).value.trim(), C2Port: parseInt(elIn(pane, `${prefix}-c2-port`).value, 10) || 0 };
+}
+function initProfilesPane(pane) {
+  wireC2Combo(pane, 'prof');
+  elIn(pane, 'prof-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const st = elIn(pane, 'prof-status');
+    const name = elIn(pane, 'prof-name').value.trim();
+    if (!name) { st.className = 'err'; st.textContent = 'enter a profile name'; return; }
+    const c2 = readC2Combo(pane, 'prof');
+    if (!c2.C2Host) { st.className = 'err'; st.textContent = c2.C2Type === 'named-pipe' ? 'enter a pipe path' : 'select a C2 host'; return; }
+    if (c2.C2Type !== 'named-pipe' && !c2.C2Port) { st.className = 'err'; st.textContent = 'specify a C2 port'; return; }
+    const opts = {
+      Name: name,
+      OS: elIn(pane, 'prof-os').value, Arch: elIn(pane, 'prof-arch').value,
+      Format: elIn(pane, 'prof-format').value, IsBeacon: elIn(pane, 'prof-type').value === 'beacon',
+      Interval: parseInt(elIn(pane, 'prof-interval').value, 10) || 60,
+      Jitter: parseInt(elIn(pane, 'prof-jitter').value, 10) || 0,
+      Reconnect: parseInt(elIn(pane, 'prof-reconnect').value, 10) || 60,
+      MaxErrors: parseInt(elIn(pane, 'prof-max-errors').value, 10) || 1000,
+      Poll: parseInt(elIn(pane, 'prof-poll').value, 10) || 360,
+      ...c2,
+    };
+    const btn = elIn(pane, 'prof-btn');
+    btn.disabled = true; st.className = 'muted mono'; st.textContent = 'saving…';
+    try {
+      await api('POST', '/api/profiles', opts);
+      st.className = 'ok'; st.textContent = `saved profile "${name}"`;
+      loadProfiles(pane);
+    } catch (e) { st.className = 'err'; st.textContent = e.message; }
+    finally { btn.disabled = false; }
+  });
+}
+async function loadProfiles(pane) {
+  fillDatalist(elIn(pane, 'prof-c2-host-list'), { v4only: true });
+  if (!elIn(pane, 'prof-c2-host').value) elIn(pane, 'prof-c2-host').value = preferredV4();
+  const body = elIn(pane, 'profiles-body');
+  body.innerHTML = '<tr><td colspan="6" class="muted">loading…</td></tr>';
+  try {
+    const profiles = await api('GET', '/api/profiles');
+    if (!profiles || !profiles.length) { body.innerHTML = '<tr><td colspan="6" class="muted">no saved profiles</td></tr>'; }
+    else {
+      body.innerHTML = '';
+      for (const p of profiles) {
+        const cfg = p.Config || {};
+        const tr = el('tr');
+        tr.innerHTML =
+          `<td class="mono">${esc(p.Name)}</td><td>${esc(cfg.GOOS)}/${esc(cfg.GOARCH)}</td>` +
+          `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
+          `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td><td></td>`;
+        const rm = el('button', 'btn danger sm', 'delete');
+        rm.onclick = async () => {
+          if (!confirm(`Delete profile "${p.Name}"?`)) return;
+          try { await api('DELETE', '/api/profiles/' + encodeURIComponent(p.Name)); loadProfiles(pane); } catch (e) { alert(e.message); }
+        };
+        tr.lastElementChild.appendChild(rm);
+        body.appendChild(tr);
+      }
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="6" class="err">${esc(e.message)}</td></tr>`; }
+  refreshStagerProfileList();
+}
+
+// ----- Implants (Payloads > Implant Builds) -----
+function initImplantsPane() {}
+async function loadImplants(pane) {
+  const body = elIn(pane, 'implants-body');
+  body.innerHTML = '<tr><td colspan="7" class="muted">loading…</td></tr>';
+  try {
+    const builds = await api('GET', '/api/implants');
+    if (!builds || !builds.length) { body.innerHTML = '<tr><td colspan="7" class="muted">no implants built yet</td></tr>'; return; }
+    body.innerHTML = '';
+    for (const b of builds) {
+      const cfg = b.Config || {};
+      const tr = el('tr');
+      tr.innerHTML =
+        `<td class="mono">${esc(b.Name)}</td><td>${esc(cfg.GOOS)}/${esc(cfg.GOARCH)}</td>` +
+        `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
+        `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td><td>${b.Staged ? 'yes' : 'no'}</td><td></td>`;
+      const rm = el('button', 'btn danger sm', 'delete');
+      rm.onclick = async () => {
+        if (!confirm(`Delete implant "${b.Name}"?`)) return;
+        try { await api('DELETE', '/api/implants/' + encodeURIComponent(b.Name)); loadImplants(pane); } catch (e) { alert(e.message); }
+      };
+      tr.lastElementChild.appendChild(rm);
+      body.appendChild(tr);
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="7" class="err">${esc(e.message)}</td></tr>`; }
+}
+
+// ----- Proxy Pivots (View > Proxy Pivots — server-wide pivot graph, table form) -----
+function initPivotGraphPane() {}
+async function loadPivotGraphTable(pane) {
+  const body = elIn(pane, 'pivot-graph-body');
+  body.innerHTML = '<tr><td colspan="3" class="muted">loading…</td></tr>';
+  try {
+    const graph = await api('GET', '/api/pivots');
+    if (!graph || !graph.Children || !graph.Children.length) { body.innerHTML = '<tr><td colspan="3" class="muted">no pivots established</td></tr>'; return; }
+    body.innerHTML = '';
+    for (const child of graph.Children) {
+      const row = el('tr');
+      row.innerHTML = `<td class="mono">${child.ID || '—'}</td><td>${esc(child.Hostname || '—')}</td><td>${(child.Children || []).length}</td>`;
+      body.appendChild(row);
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="3" class="err">${esc(e.message)}</td></tr>`; }
+}
+
+// =====================================================================
+// modal dialogs: About, Start Listener, Generate Payload, Generate Stager
+// =====================================================================
+const veil = $('#modalveil');
+const modals = { listener: $('#modalListener'), generate: $('#modalGenerate'), stager: $('#modalStager'), about: $('#modalAbout') };
+function openModal(which) {
+  Object.values(modals).forEach((m) => m.style.display = 'none');
+  modals[which].style.display = 'flex';
+  modals[which].style.flexDirection = 'column';
+  veil.style.display = 'flex';
+  if (which === 'stager') refreshStagerProfileList();
+  else if (which === 'generate') refreshGenListenerList();
+}
+function closeModal() { veil.style.display = 'none'; }
+veil.addEventListener('click', (e) => { if (e.target === veil) closeModal(); });
+$$('[data-close]').forEach((b) => b.onclick = closeModal);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && veil.style.display !== 'none') closeModal(); });
+
+async function openAbout() {
+  const body = $('#aboutBody');
+  body.innerHTML = '<span class="muted mono">loading…</span>';
+  openModal('about');
+  try {
+    const c = await api('GET', '/api/config');
+    body.innerHTML = `<div class="hostport"><span class="lbl" style="width:90px">Operator</span><span class="mono">${esc(c.operator)}</span></div>
+      <div class="hostport"><span class="lbl" style="width:90px">Server</span><span class="mono">${esc(c.server)}</span></div>`;
+  } catch (e) { body.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+// ----- Start / Edit Listener -----
+// Sliver has no "update a running listener" RPC, so editing means: stop the
+// existing job, then start a new one with the edited settings. HTTP(S) jobs
+// don't report their bind host back (only mTLS's Description embeds it), so
+// that field can't always be pre-filled — flagged to the operator via a note.
+let EDIT_JOB_ID = null;
+function resetListenerModal() {
+  EDIT_JOB_ID = null;
+  $('#mlHead').textContent = 'Start Listener';
+  $('#mlSave').textContent = 'Start';
+  $('#mlEditNote').style.display = 'none';
+}
+function openEditListener(job) {
+  EDIT_JOB_ID = job.ID;
+  $('#mlType').value = job.Name;
+  $('#mlPort').value = job.Port;
+  $('#mlDomain').value = (job.Domains && job.Domains[0]) || '';
+  let host = '';
+  if (job.Name === 'mtls') {
+    const m = (job.Description || '').match(/mutual tls listener (.+):\d+$/);
+    if (m) host = m[1];
+  }
+  const note = $('#mlEditNote');
+  if (host) {
+    $('#mlHost').value = host;
+    note.style.display = 'none';
+  } else {
+    note.style.display = '';
+    note.innerHTML = `Editing job <b>${job.ID}</b>. Sliver doesn't report the bind host for HTTP(S) jobs — verify or re-enter it below before saving.`;
+  }
+  $('#mlHead').textContent = `Edit Listener (job ${job.ID})`;
+  $('#mlSave').textContent = 'Save (restarts listener)';
+  updateBindWarning();
+  openModal('listener');
+}
+$('#tbListener').onclick = () => { resetListenerModal(); openModal('listener'); };
+$('#mlSave').onclick = async () => {
+  const type = $('#mlType').value, host = $('#mlHost').value.trim(), port = parseInt($('#mlPort').value, 10) || 0, domain = $('#mlDomain').value.trim();
+  const msg = $('#mlMsg');
+  if (isVPNBind(host) && !confirm(`Bind to ${host} (${ifaceForIP(host)})? This VPN/tunnel interface may not be up at boot and could strand this port. Continue?`)) return;
+  if (EDIT_JOB_ID != null && !confirm(`This stops job ${EDIT_JOB_ID} and starts a new listener with these settings — implants already using the old one will lose their connection until they reconnect to the new job. Continue?`)) return;
+  const editing = EDIT_JOB_ID;
+  msg.className = 'muted mono'; msg.textContent = editing != null ? 'restarting…' : 'starting…';
+  try {
+    if (editing != null) await api('DELETE', '/api/jobs/' + editing);
+    if (type === 'mtls') await api('POST', '/api/jobs/mtls', { host, port: port || 8888 });
+    else await api('POST', '/api/jobs/http', { host, domain, port: port || (type === 'https' ? 443 : 80), secure: type === 'https' });
+    msg.className = 'ok'; msg.textContent = editing != null ? 'listener replaced' : 'started';
+    resetListenerModal();
+    const p = ensurePane('jobs'); if (p) loadJobs(p);
+    setTimeout(closeModal, 700);
+  } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
+};
+
+// ----- Generate Payload -----
+// Mirrors Cobalt Strike's Generate Payload dialog: pick a *Listener* instead
+// of typing C2 details by hand. mTLS jobs report their bind host (parsed from
+// the job Description); HTTP(S) jobs don't expose one at all, so that field
+// is left editable rather than silently wrong. Named Pipe has no backing job
+// (it targets a pivot, not a server-wide listener), so it stays a manual
+// pipe-path entry, offered as a sentinel option in the same dropdown.
+function updateGenListenerFields() {
+  const isPipe = $('#mgListener').value === '__namedpipe__';
+  $('#mgC2HostPortRow').style.display = isPipe ? 'none' : '';
+  $('#mgPipeField').style.display = isPipe ? '' : 'none';
+}
+async function refreshGenListenerList() {
+  const sel = $('#mgListener');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  sel.appendChild(new Option('— Named Pipe (pivot) —', '__namedpipe__'));
+  try {
+    const jobs = await api('GET', '/api/jobs');
+    let foundListeners = false;
+    for (const j of (jobs || [])) {
+      if (!['mtls', 'http', 'https'].includes(j.Name)) continue;
+      foundListeners = true;
+      const domain = (j.Domains && j.Domains[0]) ? ' · ' + j.Domains[0] : '';
+      const opt = new Option(`${j.Name} · :${j.Port}${domain} (job ${j.ID})`, String(j.ID));
+      opt.dataset.c2type = j.Name;
+      opt.dataset.port = j.Port;
+      sel.appendChild(opt);
+    }
+    // If no listeners, add a helper option
+    if (!foundListeners) {
+      const opt = new Option('(start a listener first)', '');
+      opt.disabled = true;
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    const opt = new Option(`(error: ${e.message})`, '');
+    opt.disabled = true;
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+  updateGenListenerFields();
+  sel.dispatchEvent(new Event('change'));
+}
+$('#mgListener').addEventListener('change', async () => {
+  updateGenListenerFields();
+  const sel = $('#mgListener');
+  const opt = sel.selectedOptions[0];
+
+  if (sel.value === '__namedpipe__') {
+    sel.dataset.c2type = 'named-pipe';
+    return;
+  }
+
+  if (opt && opt.dataset.c2type) {
+    sel.dataset.c2type = opt.dataset.c2type;
+    if (opt.dataset.port) $('#mgPort').value = opt.dataset.port;
+  }
+
+  // Try to fetch and update host for mtls
+  try {
+    const jobs = await api('GET', '/api/jobs');
+    const job = (jobs || []).find((j) => String(j.ID) === sel.value);
+    if (job && job.Name === 'mtls') {
+      const m = (job.Description || '').match(/mutual tls listener (.+):\d+$/);
+      if (m) $('#mgHost').value = m[1];
+    }
+  } catch {}
+});
+$('#tbGenerate').onclick = () => openModal('generate');
+$('#mgSave').onclick = async () => {
+  const msg = $('#mgMsg');
+  const format = $('#mgFormat').value;
+  const type = $('#mgListener').dataset.c2type || 'named-pipe';
+  const c2 = type === 'named-pipe'
+    ? { C2Type: type, C2Host: $('#mgPipe').value.trim(), C2Port: 0 }
+    : { C2Type: type, C2Host: $('#mgHost').value.trim(), C2Port: parseInt($('#mgPort').value, 10) || 0 };
+  if (!c2.C2Host) { msg.className = 'err'; msg.textContent = type === 'named-pipe' ? 'enter a pipe path' : 'select (or start) a listener, then confirm the C2 host'; return; }
+  if (type !== 'named-pipe' && !c2.C2Port) { msg.className = 'err'; msg.textContent = 'specify a C2 port'; return; }
+  const savedir = $('#mgSavedir').value.trim();
+  if (!savedir) { msg.className = 'err'; msg.textContent = 'specify a save directory'; return; }
+  const opts = {
+    OS: $('#mgOs').value, Arch: $('#mgArch').value, Format: format === 'process-hollow' ? 'exe' : format,
+    IsBeacon: $('#mgType').value === 'beacon',
+    Interval: parseInt($('#mgInterval').value, 10) || 60, Jitter: parseInt($('#mgJitter').value, 10) || 0,
+    Name: $('#mgName').value.trim(), SaveDir: savedir,
+    ...c2,
+  };
+  msg.className = 'muted mono'; msg.textContent = 'building… (this can take a minute or two)';
+  $('#mgSave').disabled = true;
+  try {
+    const endpoint = format === 'process-hollow' ? '/api/generate-process-hollow' : '/api/generate';
+    const r = await api('POST', endpoint, opts);
+
+    if (format === 'process-hollow') {
+      // Process hollow returns multiple files
+      const files = [
+        { type: 'Executable', path: r.executable, size: r.executableSize },
+        { type: 'Encrypted Payload', path: r.payload, size: r.payloadSize },
+        { type: 'AES Key', path: r.key, size: r.keySize },
+        { type: 'AES IV', path: r.iv, size: r.ivSize },
+      ];
+      const fileList = files.map(f => `${f.type}: ${fmtSize(f.size)}`).join(' • ');
+      msg.className = 'ok'; msg.textContent = `Process hollow generated (${fileList})`;
+      msg.innerHTML += `<div style="margin-top:8px;font-size:0.9em;line-height:1.4">
+        <div class="mono" style="font-size:0.85em;max-height:100px;overflow-y:auto;background:var(--bg2);padding:4px;border-radius:2px">
+          ${files.map(f => `<div>${f.type}: <code>${f.path}</code></div>`).join('')}
+        </div>
+        <div style="margin-top:6px;color:var(--fg3)">All 4 files must be in the same directory to run.</div>
+      </div>`;
+    } else {
+      msg.className = 'ok'; msg.textContent = `built ${r.name} (${fmtSize(r.size)}) — saved to ${r.savedPath}`;
+    }
+    const p = ensurePane('implants'); if (p) loadImplants(p);
+    setTimeout(closeModal, 2000);
+  } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
+  finally { $('#mgSave').disabled = false; }
+};
+
+// ----- Generate Stager -----
+async function refreshStagerProfileList() {
+  const sel = $('#msProfile'); if (!sel) return;
+  const prev = sel.value;
+  try {
+    const profiles = await api('GET', '/api/profiles');
+    sel.innerHTML = '';
+    if (!profiles || !profiles.length) sel.appendChild(new Option('— no saved profiles —', ''));
+    else for (const p of profiles) sel.appendChild(new Option(p.Name, p.Name));
+    if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+  } catch { sel.innerHTML = ''; sel.appendChild(new Option('— failed to load profiles —', '')); }
+}
+$('#msSave').onclick = async () => {
+  const profile = $('#msProfile').value, host = $('#msHost').value.trim(), port = parseInt($('#msPort').value, 10) || 0;
+  const compress = $('#msCompress').value, aesKey = $('#msAesKey').value.trim(), rc4Key = $('#msRc4Key').value.trim();
+  const msg = $('#msMsg');
+  if (!profile) { msg.className = 'err'; msg.textContent = 'select a profile'; return; }
+  if (!port) { msg.className = 'err'; msg.textContent = 'enter a port'; return; }
+  if (aesKey && rc4Key) { msg.className = 'err'; msg.textContent = 'use AES or RC4, not both'; return; }
+  msg.className = 'muted mono'; msg.textContent = 'building & starting…';
+  try {
+    await api('POST', '/api/stagers', { host, port, profile, compress, aesKey, rc4Key });
+    msg.className = 'ok'; msg.textContent = 'started';
+    const p = ensurePane('jobs'); if (p) loadJobs(p);
+    setTimeout(closeModal, 700);
+  } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
+};
+
+// =====================================================================
+// directory browser (bridge host filesystem — Generate's save dir)
+// =====================================================================
+const DIRB = { targetInput: null, current: null, parent: null };
+function openDirBrowser(targetInput) {
+  DIRB.targetInput = targetInput;
+  $('#dirbrowser').style.display = 'flex';
+  loadDirBrowser(targetInput.value.trim());
+}
+function closeDirBrowser() { $('#dirbrowser').style.display = 'none'; DIRB.targetInput = null; }
+async function loadDirBrowser(path) {
+  const list = $('#dirbrowser-list'); const msg = $('#dirbrowser-msg');
+  list.innerHTML = '<div class="side-empty">loading…</div>'; msg.textContent = '';
+  try {
+    const r = await api('GET', '/api/browse-dirs' + (path ? '?path=' + encodeURIComponent(path) : ''));
+    $('#dirbrowser-path').textContent = r.path;
+    $('#dirbrowser-up').disabled = !r.parent;
+    DIRB.current = r.path; DIRB.parent = r.parent;
+    list.innerHTML = '';
+    if (!r.dirs || !r.dirs.length) { list.innerHTML = '<div class="side-empty">no subdirectories</div>'; return; }
+    for (const d of r.dirs) {
+      const row = el('div', 'file-row');
+      const nm = el('span', 'fn dir', '📁 ' + d.name);
+      nm.onclick = () => loadDirBrowser(d.path);
+      row.appendChild(nm);
+      list.appendChild(row);
+    }
+  } catch (e) { msg.textContent = e.message; list.innerHTML = ''; }
+}
+$('#mgBrowse').onclick = () => openDirBrowser($('#mgSavedir'));
+$('#dirbrowser-close').onclick = closeDirBrowser;
+$('#dirbrowser-up').onclick = () => { if (DIRB.parent) loadDirBrowser(DIRB.parent); };
+$('#dirbrowser-select').onclick = () => { if (DIRB.targetInput && DIRB.current) DIRB.targetInput.value = DIRB.current; closeDirBrowser(); };
+$('#dirbrowser').addEventListener('click', (e) => { if (e.target.id === 'dirbrowser') closeDirBrowser(); });
+
+// =====================================================================
+// boot
+// =====================================================================
+api('GET', '/api/config').then((c) => {
+  $('#conn').innerHTML = `${esc(c.operator)} @ ${esc(c.server)}`;
+}).catch((e) => { $('#conn').textContent = 'error: ' + e.message; });
+
+initEventLog();
+loadInterfaces();
+loadAgents();
+setInterval(loadAgents, 5000);
+startEvents();
