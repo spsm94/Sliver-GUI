@@ -1664,21 +1664,7 @@ $('#mgSave').onclick = async () => {
     const r = await api('POST', endpoint, opts);
 
     if (format === 'process-hollow') {
-      // Process hollow returns multiple files
-      const files = [
-        { type: 'Executable', path: r.executable, size: r.executableSize },
-        { type: 'Encrypted Payload', path: r.payload, size: r.payloadSize },
-        { type: 'AES Key', path: r.key, size: r.keySize },
-        { type: 'AES IV', path: r.iv, size: r.ivSize },
-      ];
-      const fileList = files.map(f => `${f.type}: ${fmtSize(f.size)}`).join(' • ');
-      msg.className = 'ok'; msg.textContent = `Process hollow generated (${fileList})`;
-      msg.innerHTML += `<div style="margin-top:8px;font-size:0.9em;line-height:1.4">
-        <div class="mono" style="font-size:0.85em;max-height:100px;overflow-y:auto;background:var(--bg2);padding:4px;border-radius:2px">
-          ${files.map(f => `<div>${f.type}: <code>${f.path}</code></div>`).join('')}
-        </div>
-        <div style="margin-top:6px;color:var(--fg3)">All 4 files must be in the same directory to run.</div>
-      </div>`;
+      msg.className = 'ok'; msg.textContent = `Process hollow with AES-256 generated — saved to ${r.exe}. Keep all 3 files together: key, iv, payload.`;
     } else {
       msg.className = 'ok'; msg.textContent = `built ${r.name} (${fmtSize(r.size)}) — saved to ${r.savedPath}`;
     }

