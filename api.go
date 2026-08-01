@@ -16,6 +16,12 @@ import (
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 	"google.golang.org/protobuf/proto"
+	"sync"
+)
+
+var (
+	usedSaveDirs   = make(map[string]bool)
+	saveDirsLock   sync.Mutex
 )
 
 func registerAPI(mux *http.ServeMux) {
@@ -929,8 +935,8 @@ func hImplants(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, list)
 }
 
-// hDeleteImplant removes a build's DB record/artifact and its leftover source
-// tree (same cleanup hGenerate does before reusing a name).
+// hDeleteImplant removes a build's DB record/artifact, its leftover source
+// tree, and any saved artifact files matching the build name.
 func hDeleteImplant(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	builds, err := sliver.Builds()
@@ -953,6 +959,9 @@ func hDeleteImplant(w http.ResponseWriter, r *http.Request) {
 		if err := removeBuildTree(goos, goarch, name); err != nil {
 			log.Printf("delete implant: remove build tree for %q (ignored): %v", name, err)
 		}
+	}
+	if err := deleteArtifactFiles(name); err != nil {
+		log.Printf("delete implant: remove artifact files for %q (ignored): %v", name, err)
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }

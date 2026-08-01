@@ -47,5 +47,43 @@ func saveArtifact(dir, name string, data []byte) (string, error) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
 	}
+	recordSaveDir(dir)
 	return path, nil
+}
+
+// recordSaveDir tracks directories used for artifact saves so we can clean them up later.
+func recordSaveDir(dir string) {
+	saveDirsLock.Lock()
+	defer saveDirsLock.Unlock()
+	usedSaveDirs[dir] = true
+}
+
+// deleteArtifactFiles removes all files matching the implant name pattern from tracked save directories.
+func deleteArtifactFiles(name string) error {
+	saveDirsLock.Lock()
+	dirs := make(map[string]bool)
+	for d := range usedSaveDirs {
+		dirs[d] = true
+	}
+	saveDirsLock.Unlock()
+
+	var errs []string
+	for dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.Contains(entry.Name(), name) {
+				path := filepath.Join(dir, entry.Name())
+				if err := os.Remove(path); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: %v", path, err))
+				}
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to delete some artifact files: %v", strings.Join(errs, "; "))
+	}
+	return nil
 }

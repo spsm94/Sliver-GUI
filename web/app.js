@@ -1444,7 +1444,9 @@ async function loadProfiles(pane) {
 
 // ----- Implants (Payloads > Implant Builds) -----
 function initImplantsPane() {}
+let currentImplantPane = null;
 async function loadImplants(pane) {
+  currentImplantPane = pane;
   const body = elIn(pane, 'implants-body');
   body.innerHTML = '<tr><td colspan="8" class="muted">loading…</td></tr>';
   try {
@@ -1454,18 +1456,13 @@ async function loadImplants(pane) {
     for (const b of builds) {
       const cfg = b.Config || {};
       const tr = el('tr');
-      const cbTd = el('td');
-      const cb = el('input');
-      cb.type = 'checkbox';
-      cb.dataset.name = b.Name;
-      cb.style.cursor = 'pointer';
-      cb.onchange = updateImplantSelection;
-      cbTd.appendChild(cb);
-      tr.appendChild(cbTd);
-      tr.innerHTML +=
+      tr.innerHTML =
+        `<td style="width:20px"><input type="checkbox" data-name="${esc(b.Name)}" style="cursor:pointer"></td>` +
         `<td class="mono">${esc(b.Name)}</td><td>${esc(cfg.GOOS)}/${esc(cfg.GOARCH)}</td>` +
         `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
         `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td><td>${b.Staged ? 'yes' : 'no'}</td><td></td>`;
+      const cb = tr.querySelector('input[type="checkbox"]');
+      cb.onchange = updateImplantSelection;
       const rm = el('button', 'btn danger sm', 'delete');
       rm.onclick = async () => {
         if (!confirm(`Delete implant "${b.Name}"?`)) return;
@@ -1492,7 +1489,8 @@ function updateImplantSelection() {
   const deleteBtn = $('#implants-delete-btn');
   if (countSpan) countSpan.textContent = selected.length ? `${selected.length} selected` : '';
   if (deleteBtn) deleteBtn.style.display = selected.length ? 'block' : 'none';
-  if (deleteBtn) {
+  if (deleteBtn && !deleteBtn._handler) {
+    deleteBtn._handler = true;
     deleteBtn.onclick = async () => {
       if (!confirm(`Delete ${selected.length} implant${selected.length !== 1 ? 's' : ''}?`)) return;
       let failed = 0;
@@ -1500,8 +1498,7 @@ function updateImplantSelection() {
         try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch { failed++; }
       }
       if (failed) alert(`Failed to delete ${failed} implant(s)`);
-      const pane = $('#implants-body').closest('.utilpane');
-      if (pane) loadImplants(pane);
+      if (currentImplantPane) loadImplants(currentImplantPane);
     };
   }
 }
