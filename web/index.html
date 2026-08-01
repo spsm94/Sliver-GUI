@@ -350,9 +350,13 @@
 <template id="util-implants-tpl">
   <div class="utilpane">
     <p class="page-sub">Every implant previously built on the server (via Generate or a saved profile's stager).</p>
+    <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
+      <button id="implants-delete-btn" class="btn danger sm" style="display:none">Delete selected</button>
+      <span id="implants-count" style="font-size:0.9em;color:var(--fg3)"></span>
+    </div>
     <div class="tbl-wrap">
       <table class="tbl">
-        <thead><tr><th>Name</th><th>OS/Arch</th><th>Format</th><th>Type</th><th>C2</th><th>Staged</th><th></th></tr></thead>
+        <thead><tr><th style="width:20px"><input type="checkbox" id="implants-select-all" style="cursor:pointer"></th><th>Name</th><th>OS/Arch</th><th>Format</th><th>Type</th><th>C2</th><th>Staged</th><th></th></tr></thead>
         <tbody data-el="implants-body"></tbody>
       </table>
     </div>

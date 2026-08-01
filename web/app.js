@@ -1446,15 +1446,23 @@ async function loadProfiles(pane) {
 function initImplantsPane() {}
 async function loadImplants(pane) {
   const body = elIn(pane, 'implants-body');
-  body.innerHTML = '<tr><td colspan="7" class="muted">loading…</td></tr>';
+  body.innerHTML = '<tr><td colspan="8" class="muted">loading…</td></tr>';
   try {
     const builds = await api('GET', '/api/implants');
-    if (!builds || !builds.length) { body.innerHTML = '<tr><td colspan="7" class="muted">no implants built yet</td></tr>'; return; }
+    if (!builds || !builds.length) { body.innerHTML = '<tr><td colspan="8" class="muted">no implants built yet</td></tr>'; return; }
     body.innerHTML = '';
     for (const b of builds) {
       const cfg = b.Config || {};
       const tr = el('tr');
-      tr.innerHTML =
+      const cbTd = el('td');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.dataset.name = b.Name;
+      cb.style.cursor = 'pointer';
+      cb.onchange = updateImplantSelection;
+      cbTd.appendChild(cb);
+      tr.appendChild(cbTd);
+      tr.innerHTML +=
         `<td class="mono">${esc(b.Name)}</td><td>${esc(cfg.GOOS)}/${esc(cfg.GOARCH)}</td>` +
         `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
         `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td><td>${b.Staged ? 'yes' : 'no'}</td><td></td>`;
@@ -1466,7 +1474,36 @@ async function loadImplants(pane) {
       tr.lastElementChild.appendChild(rm);
       body.appendChild(tr);
     }
-  } catch (e) { body.innerHTML = `<tr><td colspan="7" class="err">${esc(e.message)}</td></tr>`; }
+    const selectAllCb = $('#implants-select-all');
+    if (selectAllCb) {
+      selectAllCb.checked = false;
+      selectAllCb.onchange = () => {
+        const cbs = body.querySelectorAll('input[type="checkbox"]');
+        cbs.forEach(cb => { cb.checked = selectAllCb.checked; });
+        updateImplantSelection();
+      };
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="8" class="err">${esc(e.message)}</td></tr>`; }
+}
+function updateImplantSelection() {
+  const cbs = $$('#implants-body input[type="checkbox"]');
+  const selected = cbs.filter(cb => cb.checked).map(cb => cb.dataset.name);
+  const countSpan = $('#implants-count');
+  const deleteBtn = $('#implants-delete-btn');
+  if (countSpan) countSpan.textContent = selected.length ? `${selected.length} selected` : '';
+  if (deleteBtn) deleteBtn.style.display = selected.length ? 'block' : 'none';
+  if (deleteBtn) {
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Delete ${selected.length} implant${selected.length !== 1 ? 's' : ''}?`)) return;
+      let failed = 0;
+      for (const name of selected) {
+        try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch { failed++; }
+      }
+      if (failed) alert(`Failed to delete ${failed} implant(s)`);
+      const pane = $('#implants-body').closest('.utilpane');
+      if (pane) loadImplants(pane);
+    };
+  }
 }
 
 // ----- Proxy Pivots (View > Proxy Pivots — server-wide pivot graph, table form) -----
