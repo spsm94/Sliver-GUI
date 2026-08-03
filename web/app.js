@@ -1700,7 +1700,7 @@ $('#mgSave').onclick = async () => {
     const r = await api('POST', endpoint, opts);
 
     if (format === 'process-hollow') {
-      msg.className = 'ok'; msg.textContent = `Process hollow with AES-256 generated — saved to ${r.exe}. Keep all 3 files together: key, iv, payload.`;
+      msg.className = 'ok'; msg.textContent = `Process hollow with AES-256 generated (${fmtSize(r.size)}) — saved to ${r.path}`;
     } else {
       msg.className = 'ok'; msg.textContent = `built ${r.name} (${fmtSize(r.size)}) — saved to ${r.savedPath}`;
     }
