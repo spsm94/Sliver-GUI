@@ -1443,10 +1443,34 @@ async function loadProfiles(pane) {
 }
 
 // ----- Implants (Payloads > Implant Builds) -----
-function initImplantsPane() {}
-let currentImplantPane = null;
+function initImplantsPane() {
+  const deleteBtn = $('#implants-delete-btn');
+  if (deleteBtn && !deleteBtn._initialized) {
+    deleteBtn._initialized = true;
+    deleteBtn.onclick = async () => {
+      const cbs = $$('#implants-body input[type="checkbox"]:checked');
+      const toDelete = Array.from(cbs).map(cb => cb.dataset.name);
+      if (!toDelete.length) { alert('Select implants to delete'); return; }
+      if (!confirm(`Delete ${toDelete.length} implant(s)?`)) return;
+      for (const name of toDelete) {
+        try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch (e) { alert(`Failed to delete ${name}: ${e.message}`); }
+      }
+      const pane = deleteBtn.closest('.utilpane');
+      if (pane) loadImplants(pane);
+    };
+  }
+  const selectAllCb = $('#implants-select-all');
+  if (selectAllCb && !selectAllCb._initialized) {
+    selectAllCb._initialized = true;
+    selectAllCb.onchange = () => {
+      const body = $('#implants-body');
+      const cbs = body.querySelectorAll('input[type="checkbox"]');
+      cbs.forEach(cb => { cb.checked = selectAllCb.checked; });
+      updateImplantCount();
+    };
+  }
+}
 async function loadImplants(pane) {
-  currentImplantPane = pane;
   const body = elIn(pane, 'implants-body');
   body.innerHTML = '<tr><td colspan="8" class="muted">loading…</td></tr>';
   try {
@@ -1462,7 +1486,7 @@ async function loadImplants(pane) {
         `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
         `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td><td>${b.Staged ? 'yes' : 'no'}</td><td></td>`;
       const cb = tr.querySelector('input[type="checkbox"]');
-      cb.onchange = updateImplantSelection;
+      cb.onchange = updateImplantCount;
       const rm = el('button', 'btn danger sm', 'delete');
       rm.onclick = async () => {
         if (!confirm(`Delete implant "${b.Name}"?`)) return;
@@ -1471,39 +1495,16 @@ async function loadImplants(pane) {
       tr.lastElementChild.appendChild(rm);
       body.appendChild(tr);
     }
-    const selectAllCb = $('#implants-select-all');
-    if (selectAllCb) {
-      selectAllCb.checked = false;
-      selectAllCb.onchange = () => {
-        const cbs = body.querySelectorAll('input[type="checkbox"]');
-        cbs.forEach(cb => { cb.checked = selectAllCb.checked; });
-        updateImplantSelection();
-      };
-    }
+    updateImplantCount();
   } catch (e) { body.innerHTML = `<tr><td colspan="8" class="err">${esc(e.message)}</td></tr>`; }
 }
-function updateImplantSelection() {
-  const cbs = $$('#implants-body input[type="checkbox"]');
-  const selected = cbs.filter(cb => cb.checked).map(cb => cb.dataset.name);
+function updateImplantCount() {
+  const cbs = $$('#implants-body input[type="checkbox"]:checked');
+  const count = cbs.length;
   const countSpan = $('#implants-count');
   const deleteBtn = $('#implants-delete-btn');
-  if (countSpan) countSpan.textContent = selected.length ? `${selected.length} selected` : '';
-  if (deleteBtn) deleteBtn.style.display = selected.length ? 'block' : 'none';
-  if (deleteBtn && !deleteBtn._handler) {
-    deleteBtn._handler = true;
-    deleteBtn.onclick = async () => {
-      const cbs = $$('#implants-body input[type="checkbox"]');
-      const toDelete = cbs.filter(cb => cb.checked).map(cb => cb.dataset.name);
-      if (!toDelete.length) return;
-      if (!confirm(`Delete ${toDelete.length} implant${toDelete.length !== 1 ? 's' : ''}?`)) return;
-      let failed = 0;
-      for (const name of toDelete) {
-        try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch { failed++; }
-      }
-      if (failed) alert(`Failed to delete ${failed} implant(s)`);
-      if (currentImplantPane) loadImplants(currentImplantPane);
-    };
-  }
+  if (countSpan) countSpan.textContent = count ? `${count} selected` : '';
+  if (deleteBtn) deleteBtn.style.display = count ? 'block' : 'none';
 }
 
 // ----- Proxy Pivots (View > Proxy Pivots — server-wide pivot graph, table form) -----
