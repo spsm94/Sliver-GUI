@@ -69,7 +69,6 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/target/{id}/pivots/{pid}", hStopPivot)
 
 	mux.HandleFunc("POST /api/generate", hGenerate)
-	mux.HandleFunc("POST /api/generate-process-hollow", hGenerateProcessHollow)
 
 	// implant profiles (saved generate configs)
 	mux.HandleFunc("GET /api/profiles", hProfiles)
@@ -744,57 +743,6 @@ func hGenerate(w http.ResponseWriter, r *http.Request) {
 		"name":      resp.File.Name,
 		"size":      len(resp.File.Data),
 		"savedPath": savedPath,
-	})
-}
-
-// hGenerateProcessHollow generates a process hollowing payload with AES-encrypted shellcode.
-func hGenerateProcessHollow(w http.ResponseWriter, r *http.Request) {
-	var opts GenerateOptions
-	if err := decode(r, &opts); err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-	if opts.OS == "" {
-		opts.OS = "windows"
-	}
-	if opts.Arch == "" {
-		opts.Arch = "amd64"
-	}
-	if opts.Interval == 0 {
-		opts.Interval = 60
-	}
-	if err := validateC2Opts(opts); err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-
-	dir := strings.TrimSpace(opts.SaveDir)
-	if dir == "" {
-		writeErr(w, fmt.Errorf("save directory is required; the artifact is written to disk, not downloaded"), 400)
-		return
-	}
-
-	executable, _, _, _, err := sliver.ProcessHollowPayload(opts)
-	if err != nil {
-		writeErr(w, err, 502)
-		return
-	}
-
-	baseName := strings.TrimSpace(opts.Name)
-	if baseName == "" {
-		baseName = "payload"
-	}
-
-	exePath, err := saveArtifact(dir, baseName+".exe", executable)
-	if err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-
-	writeJSON(w, map[string]any{
-		"path": exePath,
-		"size": len(executable),
-		"note": "Single executable with embedded encrypted payload. Transfer and execute on target.",
 	})
 }
 

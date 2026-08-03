@@ -1687,7 +1687,7 @@ $('#mgSave').onclick = async () => {
   const savedir = $('#mgSavedir').value.trim();
   if (!savedir) { msg.className = 'err'; msg.textContent = 'specify a save directory'; return; }
   const opts = {
-    OS: $('#mgOs').value, Arch: $('#mgArch').value, Format: format === 'process-hollow' ? 'exe' : format,
+    OS: $('#mgOs').value, Arch: $('#mgArch').value, Format: format,
     IsBeacon: $('#mgType').value === 'beacon',
     Interval: parseInt($('#mgInterval').value, 10) || 60, Jitter: parseInt($('#mgJitter').value, 10) || 0,
     Name: $('#mgName').value.trim(), SaveDir: savedir,
@@ -1696,14 +1696,8 @@ $('#mgSave').onclick = async () => {
   msg.className = 'muted mono'; msg.textContent = 'building… (this can take a minute or two)';
   $('#mgSave').disabled = true;
   try {
-    const endpoint = format === 'process-hollow' ? '/api/generate-process-hollow' : '/api/generate';
-    const r = await api('POST', endpoint, opts);
-
-    if (format === 'process-hollow') {
-      msg.className = 'ok'; msg.textContent = `Process hollow with AES-256 generated (${fmtSize(r.size)}) — saved to ${r.path}`;
-    } else {
-      msg.className = 'ok'; msg.textContent = `built ${r.name} (${fmtSize(r.size)}) — saved to ${r.savedPath}`;
-    }
+    const r = await api('POST', '/api/generate', opts);
+    msg.className = 'ok'; msg.textContent = `built ${r.name} (${fmtSize(r.size)}) — saved to ${r.savedPath}`;
     const p = ensurePane('implants'); if (p) loadImplants(p);
     setTimeout(closeModal, 2000);
   } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
@@ -1724,14 +1718,13 @@ async function refreshStagerProfileList() {
 }
 $('#msSave').onclick = async () => {
   const profile = $('#msProfile').value, host = $('#msHost').value.trim(), port = parseInt($('#msPort').value, 10) || 0;
-  const compress = $('#msCompress').value, aesKey = $('#msAesKey').value.trim(), rc4Key = $('#msRc4Key').value.trim();
+  const compress = $('#msCompress').value, rc4Key = $('#msRc4Key').value.trim();
   const msg = $('#msMsg');
   if (!profile) { msg.className = 'err'; msg.textContent = 'select a profile'; return; }
   if (!port) { msg.className = 'err'; msg.textContent = 'enter a port'; return; }
-  if (aesKey && rc4Key) { msg.className = 'err'; msg.textContent = 'use AES or RC4, not both'; return; }
   msg.className = 'muted mono'; msg.textContent = 'building & starting…';
   try {
-    await api('POST', '/api/stagers', { host, port, profile, compress, aesKey, rc4Key });
+    await api('POST', '/api/stagers', { host, port, profile, compress, rc4Key });
     msg.className = 'ok'; msg.textContent = 'started';
     const p = ensurePane('jobs'); if (p) loadJobs(p);
     setTimeout(closeModal, 700);
