@@ -94,6 +94,7 @@ const STATE = {
   filter: '',
   panels: {},   // agentId -> { cwd }
   nodePos: {},  // agentId -> {x,y} — manually dragged graph node positions
+  tabNames: {}, // id -> custom tab name
 };
 
 // =====================================================================
@@ -791,9 +792,13 @@ const dockBody = $('#dockBody');
 function addTab(id, label, dotColor, closable) {
   const tab = el('button', 'dtab');
   tab.dataset.tab = id;
+  const displayLabel = STATE.tabNames[id] || label;
   tab.innerHTML = (dotColor ? `<span class="dot" style="background:${dotColor}"></span>` : '') +
-    `<span class="tab-label">${esc(label)}</span>` + (closable ? '<span class="x">&times;</span>' : '');
+    `<span class="tab-label">${esc(displayLabel)}</span>` + (closable ? '<span class="x">&times;</span>' : '');
   tab.addEventListener('click', (e) => { if (e.target.classList.contains('x')) { closeTabDock(id); return; } activateTab(id); });
+  if (closable) {
+    tab.addEventListener('dblclick', (e) => { e.stopPropagation(); renameTab(id, tab, label); });
+  }
   dockTabs.appendChild(tab);
   return tab;
 }
@@ -801,11 +806,25 @@ function activateTab(id) {
   $$('.dtab', dockTabs).forEach((t) => t.classList.toggle('active', t.dataset.tab === id));
   $$('.dpane', dockBody).forEach((p) => p.classList.toggle('active', p.dataset.tab === id));
 }
+function renameTab(id, tab, defaultLabel) {
+  const current = STATE.tabNames[id] || defaultLabel;
+  const newName = prompt('Rename tab:', current);
+  if (newName === null || newName.trim() === '') return;
+  const trimmed = newName.trim();
+  if (trimmed === defaultLabel) {
+    delete STATE.tabNames[id];
+  } else {
+    STATE.tabNames[id] = trimmed;
+  }
+  const label = tab.querySelector('.tab-label');
+  if (label) label.textContent = trimmed === defaultLabel ? defaultLabel : trimmed;
+}
 function closeTabDock(id) {
   const wasActive = dockTabs.querySelector(`.dtab[data-tab="${id}"]`)?.classList.contains('active');
   dockTabs.querySelector(`.dtab[data-tab="${id}"]`)?.remove();
   ensurePane(id)?.remove();
   delete STATE.panels[id];
+  delete STATE.tabNames[id];
   if (wasActive) activateTab('log');
 }
 function ensurePane(id) { return dockBody.querySelector(`[data-tab="${id}"]`); }
