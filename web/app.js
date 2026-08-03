@@ -1443,28 +1443,23 @@ async function loadProfiles(pane) {
 }
 
 // ----- Implants (Payloads > Implant Builds) -----
-function initImplantsPane() {
-  const deleteBtn = $('#implants-delete-btn');
-  if (deleteBtn && !deleteBtn._initialized) {
-    deleteBtn._initialized = true;
-    deleteBtn.onclick = async () => {
-      const tbody = document.querySelector('[data-el="implants-body"]');
-      const cbs = tbody ? tbody.querySelectorAll('input[type="checkbox"]:checked') : [];
-      const toDelete = Array.from(cbs).map(cb => cb.dataset.name);
-      if (!toDelete.length) { alert('Select implants to delete'); return; }
-      if (!confirm(`Delete ${toDelete.length} implant(s)?`)) return;
-      for (const name of toDelete) {
-        try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch (e) { alert(`Failed: ${e.message}`); }
-      }
-      const pane = deleteBtn.closest('.utilpane');
-      if (pane) loadImplants(pane);
-    };
+async function deleteSelectedImplants() {
+  const tbody = document.querySelector('[data-el="implants-body"]');
+  const cbs = tbody ? Array.from(tbody.querySelectorAll('input[type="checkbox"]:checked')) : [];
+  const toDelete = cbs.map(cb => cb.dataset.name);
+  if (!toDelete.length) { alert('Select implants to delete'); return; }
+  if (!confirm(`Delete ${toDelete.length} implant(s)?`)) return;
+  for (const name of toDelete) {
+    try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch (e) { alert(`Failed: ${e.message}`); }
   }
-  const selectAllCb = $('#implants-select-all');
-  if (selectAllCb && !selectAllCb._initialized) {
-    selectAllCb._initialized = true;
+  const pane = document.querySelector('.utilpane[data-tab="implants"]');
+  if (pane) loadImplants(pane);
+}
+function initImplantsPane(pane) {
+  const selectAllCb = pane.querySelector('#implants-select-all');
+  if (selectAllCb) {
     selectAllCb.onchange = () => {
-      const tbody = document.querySelector('[data-el="implants-body"]');
+      const tbody = pane.querySelector('[data-el="implants-body"]');
       const cbs = tbody ? tbody.querySelectorAll('input[type="checkbox"]') : [];
       cbs.forEach(cb => { cb.checked = selectAllCb.checked; });
       updateImplantCount();
