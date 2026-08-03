@@ -1448,12 +1448,13 @@ function initImplantsPane() {
   if (deleteBtn && !deleteBtn._initialized) {
     deleteBtn._initialized = true;
     deleteBtn.onclick = async () => {
-      const cbs = $$('#implants-body input[type="checkbox"]:checked');
+      const tbody = document.querySelector('[data-el="implants-body"]');
+      const cbs = tbody ? tbody.querySelectorAll('input[type="checkbox"]:checked') : [];
       const toDelete = Array.from(cbs).map(cb => cb.dataset.name);
       if (!toDelete.length) { alert('Select implants to delete'); return; }
       if (!confirm(`Delete ${toDelete.length} implant(s)?`)) return;
       for (const name of toDelete) {
-        try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch (e) { alert(`Failed to delete ${name}: ${e.message}`); }
+        try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch (e) { alert(`Failed: ${e.message}`); }
       }
       const pane = deleteBtn.closest('.utilpane');
       if (pane) loadImplants(pane);
@@ -1463,8 +1464,8 @@ function initImplantsPane() {
   if (selectAllCb && !selectAllCb._initialized) {
     selectAllCb._initialized = true;
     selectAllCb.onchange = () => {
-      const body = $('#implants-body');
-      const cbs = body.querySelectorAll('input[type="checkbox"]');
+      const tbody = document.querySelector('[data-el="implants-body"]');
+      const cbs = tbody ? tbody.querySelectorAll('input[type="checkbox"]') : [];
       cbs.forEach(cb => { cb.checked = selectAllCb.checked; });
       updateImplantCount();
     };
@@ -1499,7 +1500,8 @@ async function loadImplants(pane) {
   } catch (e) { body.innerHTML = `<tr><td colspan="8" class="err">${esc(e.message)}</td></tr>`; }
 }
 function updateImplantCount() {
-  const cbs = $$('#implants-body input[type="checkbox"]:checked');
+  const tbody = document.querySelector('[data-el="implants-body"]');
+  const cbs = tbody ? Array.from(tbody.querySelectorAll('input[type="checkbox"]:checked')) : [];
   const count = cbs.length;
   const countSpan = $('#implants-count');
   const deleteBtn = $('#implants-delete-btn');
