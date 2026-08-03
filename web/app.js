@@ -312,7 +312,7 @@ function renderTable() {
     if (rec.kind === 'dead') tr.className = 'is-dead';
     tr.innerHTML =
       `<td><span class="monitor" style="background:${monitorColor(rec)}"></span></td>` +
-      `<td>${esc(agentName(a))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
+      `<td>${esc(a.Name || agentName(a))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
       `<td>${esc(a.Transport)}</td><td class="num">${a.PID}</td><td class="num">${esc(a.Arch)}</td>` +
       `<td class="num">${esc(ago(a.LastCheckin))}</td><td class="num">${esc(sleepLabel(rec))}</td>`;
     tr.addEventListener('click', () => openAgentConsole(id));
@@ -665,7 +665,8 @@ async function renderGraph() {
     g.innerHTML =
       `<circle r="9" fill="${rec.kind === 'dead' ? '#3a3d42' : color}" fill-opacity="${rec.kind === 'dead' ? '1' : '0.24'}" stroke="${color}" stroke-width="2"/>
        <circle r="3" fill="${color}"/>
-       <text class="name" y="-16" text-anchor="middle">${esc(agentName(a))}</text>
+       <text class="name" y="-18" text-anchor="middle">${esc(a.Name || agentName(a))}</text>
+       <text class="sub" y="6" text-anchor="middle">${esc(agentName(a))}</text>
        <text class="sub" y="22" text-anchor="middle">${esc(a.Hostname)}</text>`;
     g.addEventListener('contextmenu', (e) => { e.preventDefault(); showAgentMenu(id, e.clientX, e.clientY); });
     wireNodeDrag(svg, g, id);
