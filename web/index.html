@@ -38,7 +38,6 @@
       <div class="ddown">
         <button data-act="modal" data-modal="generate">Generate Payload&hellip;</button>
         <button data-act="open-tab" data-tab="profiles">Implant Profiles</button>
-        <button data-act="modal" data-modal="stager">Generate Stager&hellip;</button>
         <button data-act="open-tab" data-tab="implants">Implant Builds</button>
       </div>
     </div>
@@ -627,24 +626,6 @@
       </label>
     </div>
     <div class="modal-foot"><span class="spacer" id="mgMsg"></span><button class="btn" data-close>Cancel</button><button class="btn emerald" id="mgSave">Generate</button></div>
-  </div>
-
-  <div class="modal-box narrow" id="modalStager" style="display:none">
-    <div class="modal-head">Generate Stager</div>
-    <div class="modal-body form">
-      <label class="field" style="margin:0"><span class="lbl">Profile</span><select id="msProfile" class="mono"></select></label>
-      <div class="grid2">
-        <label class="field" style="margin:0"><span class="lbl">Bind host (interface &rarr; IP)</span><select id="msHost" class="mono"></select></label>
-        <label class="field" style="margin:0"><span class="lbl">Port</span><input id="msPort" class="mono" type="number" placeholder="9898"></label>
-      </div>
-      <label class="field" style="margin:0"><span class="lbl">Compression (optional)</span>
-        <select id="msCompress"><option value="">none</option><option value="zlib">zlib</option><option value="gzip">gzip</option><option value="deflate9">deflate</option></select>
-      </label>
-      <div class="grid2">
-        <label class="field" style="margin:0"><span class="lbl">RC4 key (optional)</span><input id="msRc4Key" class="mono" placeholder="1-256 bytes"></label>
-      </div>
-    </div>
-    <div class="modal-foot"><span class="spacer" id="msMsg"></span><button class="btn" data-close>Cancel</button><button class="btn emerald" id="msSave">Start</button></div>
   </div>
 
   <div class="modal-box narrow" id="modalAbout" style="display:none">

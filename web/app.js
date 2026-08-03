@@ -1482,7 +1482,6 @@ async function loadProfiles(pane) {
       }
     }
   } catch (e) { body.innerHTML = `<tr><td colspan="6" class="err">${esc(e.message)}</td></tr>`; }
-  refreshStagerProfileList();
 }
 
 // ----- Implants (Payloads > Implant Builds) -----
@@ -1566,17 +1565,16 @@ async function loadPivotGraphTable(pane) {
 }
 
 // =====================================================================
-// modal dialogs: About, Start Listener, Generate Payload, Generate Stager
+// modal dialogs: About, Start Listener, Generate Payload
 // =====================================================================
 const veil = $('#modalveil');
-const modals = { listener: $('#modalListener'), generate: $('#modalGenerate'), stager: $('#modalStager'), about: $('#modalAbout') };
+const modals = { listener: $('#modalListener'), generate: $('#modalGenerate'), about: $('#modalAbout') };
 function openModal(which) {
   Object.values(modals).forEach((m) => m.style.display = 'none');
   modals[which].style.display = 'flex';
   modals[which].style.flexDirection = 'column';
   veil.style.display = 'flex';
-  if (which === 'stager') refreshStagerProfileList();
-  else if (which === 'generate') refreshGenListenerList();
+  if (which === 'generate') refreshGenListenerList();
 }
 function closeModal() { veil.style.display = 'none'; }
 veil.addEventListener('click', (e) => { if (e.target === veil) closeModal(); });
@@ -1748,32 +1746,6 @@ $('#mgSave').onclick = async () => {
 };
 
 // ----- Generate Stager -----
-async function refreshStagerProfileList() {
-  const sel = $('#msProfile'); if (!sel) return;
-  const prev = sel.value;
-  try {
-    const profiles = await api('GET', '/api/profiles');
-    sel.innerHTML = '';
-    if (!profiles || !profiles.length) sel.appendChild(new Option('— no saved profiles —', ''));
-    else for (const p of profiles) sel.appendChild(new Option(p.Name, p.Name));
-    if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
-  } catch { sel.innerHTML = ''; sel.appendChild(new Option('— failed to load profiles —', '')); }
-}
-$('#msSave').onclick = async () => {
-  const profile = $('#msProfile').value, host = $('#msHost').value.trim(), port = parseInt($('#msPort').value, 10) || 0;
-  const compress = $('#msCompress').value, rc4Key = $('#msRc4Key').value.trim();
-  const msg = $('#msMsg');
-  if (!profile) { msg.className = 'err'; msg.textContent = 'select a profile'; return; }
-  if (!port) { msg.className = 'err'; msg.textContent = 'enter a port'; return; }
-  msg.className = 'muted mono'; msg.textContent = 'building & starting…';
-  try {
-    await api('POST', '/api/stagers', { host, port, profile, compress, rc4Key });
-    msg.className = 'ok'; msg.textContent = 'started';
-    const p = ensurePane('jobs'); if (p) loadJobs(p);
-    setTimeout(closeModal, 700);
-  } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
-};
-
 // =====================================================================
 // directory browser (bridge host filesystem — Generate's save dir)
 // =====================================================================
