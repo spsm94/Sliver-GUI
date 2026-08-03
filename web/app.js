@@ -865,6 +865,24 @@ async function runTermCommand(id, line, scroll) {
     pushConsoleRow(scroll, { cmd: line, err: err.message });
   }
 }
+function completeCommand(input) {
+  const text = input.value;
+  const commands = ['sessions', 'beacons', 'use', 'info', 'jobs', 'generate', 'ls', 'cd', 'ps',
+    'download', 'upload', 'execute', 'execute-assembly', 'screenshot', 'kill', 'getsystem',
+    'make-token', 'impersonate', 'procdump', 'hashdump', 'registry', 'execute-shellcode',
+    'sideload', 'migrate', 'armory', 'profiles', 'loot', 'hosts', 'pivots', 'help'];
+  const words = text.split(/\s+/);
+  const partial = words[words.length - 1];
+  if (!partial) return;
+  const matches = commands.filter(c => c.startsWith(partial.toLowerCase()));
+  if (matches.length === 1) {
+    words[words.length - 1] = matches[0];
+    input.value = words.join(' ') + ' ';
+  } else if (matches.length > 1) {
+    words[words.length - 1] = partial.toUpperCase();
+    input.value = words.join(' ');
+  }
+}
 // runInPanel drives a command from the context menu into an already-open
 // agent console tab (Access > Elevate, etc.) as if the operator typed it.
 function runInPanel(id, line) {
@@ -918,7 +936,7 @@ function buildAgentPanel(id, rec) {
   root.classList.add('dpane', 'consolepane');
   root.dataset.tab = id;
   root.style.display = '';
-  STATE.panels[id] = { cwd: '/' };
+  STATE.panels[id] = { cwd: '/', history: [], historyIdx: -1 };
 
   $$('.subtab', root).forEach((t) => t.onclick = () => switchSubtab(root, id, t.dataset.sub));
 
@@ -930,8 +948,33 @@ function buildAgentPanel(id, rec) {
     e.preventDefault();
     const line = cmdInput.value.trim();
     if (!line) return;
+    STATE.panels[id].history.push(line);
+    STATE.panels[id].historyIdx = -1;
     cmdInput.value = '';
     runTermCommand(id, line, scroll);
+  });
+  cmdInput.addEventListener('keydown', (e) => {
+    const panel = STATE.panels[id];
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (panel.history.length === 0) return;
+      if (panel.historyIdx === -1) panel.historyIdx = panel.history.length - 1;
+      else if (panel.historyIdx > 0) panel.historyIdx--;
+      cmdInput.value = panel.history[panel.historyIdx];
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (panel.historyIdx === -1) return;
+      if (panel.historyIdx < panel.history.length - 1) {
+        panel.historyIdx++;
+        cmdInput.value = panel.history[panel.historyIdx];
+      } else {
+        panel.historyIdx = -1;
+        cmdInput.value = '';
+      }
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      completeCommand(cmdInput);
+    }
   });
 
   // ---- files ----
