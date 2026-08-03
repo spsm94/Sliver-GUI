@@ -47,6 +47,7 @@
       <div class="ddown">
         <button data-act="modal" data-modal="listener">Start Listener&hellip;</button>
         <button data-act="open-tab" data-tab="jobs">Manage Listeners</button>
+        <button data-act="open-tab" data-tab="stagelisteners">Stage Listeners</button>
       </div>
     </div>
 
@@ -251,6 +252,43 @@
         <table class="tbl">
           <thead><tr><th>Job</th><th>Type</th><th>Host</th><th>Port</th><th></th></tr></thead>
           <tbody data-el="stale-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="util-stagelisteners-tpl">
+  <div class="utilpane">
+    <p class="page-sub">Stage listeners serve full implants to first-stage payloads on connect.</p>
+    <form class="limit" style="margin-bottom:20px">
+      <div class="section">
+        <h2>Start Stage Listener</h2>
+        <div class="card">
+          <div class="grid2">
+            <label class="field"><span class="lbl">URL (staging callback)</span>
+              <input data-el="sl-url" class="mono" placeholder="tcp://10.10.14.10:4443" required>
+            </label>
+            <label class="field"><span class="lbl">Profile</span>
+              <select data-el="sl-profile" class="mono"></select>
+            </label>
+          </div>
+          <label class="field" style="margin-top:12px">
+            <input type="checkbox" data-el="sl-prepend-size"> Prepend size
+          </label>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button type="button" class="btn emerald" data-el="sl-start">Start</button>
+          <span data-el="sl-msg" class="muted mono" style="flex:1"></span>
+        </div>
+      </div>
+    </form>
+    <div class="section">
+      <h2>Active Stage Listeners</h2>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Job</th><th>URL</th><th>Profile</th><th></th></tr></thead>
+          <tbody data-el="sl-body"></tbody>
         </table>
       </div>
     </div>

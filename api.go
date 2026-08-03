@@ -37,6 +37,8 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/jobs/{id}", hKillJob)
 	mux.HandleFunc("GET /api/jobs/stale", hStaleListeners)
 	mux.HandleFunc("DELETE /api/jobs/stale/{id}", hRemoveStale)
+	mux.HandleFunc("GET /api/stage-listeners", hGetStageListeners)
+	mux.HandleFunc("POST /api/stage-listeners", hStartStageListener)
 
 	mux.HandleFunc("POST /api/target/{id}/execute", hExecute)
 	mux.HandleFunc("GET /api/target/{id}/task/{taskId}", hExecuteTask)
@@ -287,6 +289,58 @@ func hStaleListeners(w http.ResponseWriter, r *http.Request) {
 // currently-running job (enforced in RemoveStaleListener).
 func hRemoveStale(w http.ResponseWriter, r *http.Request) {
 	if err := sliver.RemoveStaleListener(atoiU32(r.PathValue("id"))); err != nil {
+		writeErr(w, err, 502)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func hGetStageListeners(w http.ResponseWriter, r *http.Request) {
+	jobs, err := sliver.Jobs()
+	if err != nil {
+		writeErr(w, err, 502)
+		return
+	}
+	var stageListeners []map[string]any
+	for _, j := range jobs {
+		if j.Name == "stage" {
+			stageListeners = append(stageListeners, map[string]any{
+				"JobID":   j.ID,
+				"URL":     j.Description,
+				"Profile": j.Name,
+			})
+		}
+	}
+	if stageListeners == nil {
+		stageListeners = []map[string]any{}
+	}
+	writeJSON(w, stageListeners)
+}
+
+func hStartStageListener(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		URL         string `json:"url"`
+		Profile     string `json:"profile"`
+		PrependSize bool   `json:"prependSize"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err, 400)
+		return
+	}
+	if strings.TrimSpace(in.URL) == "" {
+		writeErr(w, fmt.Errorf("URL required"), 400)
+		return
+	}
+	if strings.TrimSpace(in.Profile) == "" {
+		writeErr(w, fmt.Errorf("profile required"), 400)
+		return
+	}
+	cmd := fmt.Sprintf("stage-listener --url %s --profile %s", in.URL, in.Profile)
+	if in.PrependSize {
+		cmd += " --prepend-size"
+	}
+	_, err := runSliverConsole("", cmd)
+	if err != nil {
 		writeErr(w, err, 502)
 		return
 	}

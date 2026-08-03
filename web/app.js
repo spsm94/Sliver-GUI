@@ -1296,7 +1296,7 @@ function openUtilTab(key) {
   let pane = ensurePane(key);
   if (!pane) {
     const tpl = $(`#util-${key}-tpl`);
-    const label = { log: 'Event Log', jobs: 'Listeners', profiles: 'Profiles', implants: 'Implants', pivotgraph: 'Proxy Pivots', help: 'Help' }[key];
+    const label = { log: 'Event Log', jobs: 'Listeners', stagelisteners: 'Stage Listeners', profiles: 'Profiles', implants: 'Implants', pivotgraph: 'Proxy Pivots', help: 'Help' }[key];
     if (tpl) {
       const frag = tpl.content.cloneNode(true);
       pane = frag.firstElementChild;
@@ -1308,12 +1308,14 @@ function openUtilTab(key) {
     dockBody.appendChild(pane);
     addTab(key, label, null, key !== 'log');
     if (key === 'jobs') initJobsPane(pane);
+    else if (key === 'stagelisteners') initStageListenersPane(pane);
     else if (key === 'profiles') initProfilesPane(pane);
     else if (key === 'implants') initImplantsPane(pane);
     else if (key === 'pivotgraph') initPivotGraphPane(pane);
   }
   activateTab(key);
   if (key === 'jobs') loadJobs(pane);
+  else if (key === 'stagelisteners') loadStageListeners(pane);
   else if (key === 'profiles') loadProfiles(pane);
   else if (key === 'implants') loadImplants(pane);
   else if (key === 'pivotgraph') loadPivotGraphTable(pane);
@@ -1399,6 +1401,54 @@ async function loadStale(pane) {
     tr.lastElementChild.appendChild(rm);
     body.appendChild(tr);
   }
+}
+
+// ----- Stage Listeners -----
+function initStageListenersPane(pane) {
+  const startBtn = elIn(pane, 'sl-start');
+  const msg = elIn(pane, 'sl-msg');
+  startBtn.onclick = async () => {
+    const url = elIn(pane, 'sl-url').value.trim();
+    const profile = elIn(pane, 'sl-profile').value;
+    const prependSize = elIn(pane, 'sl-prepend-size').checked;
+    if (!url) { msg.className = 'err'; msg.textContent = 'enter URL'; return; }
+    if (!profile) { msg.className = 'err'; msg.textContent = 'select profile'; return; }
+    msg.className = 'muted'; msg.textContent = 'starting…';
+    try {
+      await api('POST', '/api/stage-listeners', { url, profile, prependSize });
+      msg.className = 'ok'; msg.textContent = 'started';
+      elIn(pane, 'sl-url').value = '';
+      setTimeout(() => { msg.textContent = ''; loadStageListeners(pane); }, 800);
+    } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
+  };
+  refreshStageProfiles(pane);
+}
+async function loadStageListeners(pane) {
+  const body = elIn(pane, 'sl-body');
+  try {
+    const listeners = await api('GET', '/api/stage-listeners');
+    body.innerHTML = '';
+    if (!listeners || !listeners.length) { body.innerHTML = '<tr><td colspan="4" class="empty">no active stage listeners</td></tr>'; }
+    else {
+      for (const l of listeners) {
+        const tr = el('tr');
+        tr.innerHTML = `<td>${l.JobID}</td><td class="mono">${esc(l.URL)}</td><td>${esc(l.Profile)}</td><td></td>`;
+        const stop = el('button', 'btn danger sm', 'stop');
+        stop.onclick = async () => { try { await api('DELETE', '/api/jobs/' + l.JobID); loadStageListeners(pane); } catch (e) { alert(e.message); } };
+        tr.lastElementChild.appendChild(stop);
+        body.appendChild(tr);
+      }
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="4" class="empty">${esc(e.message)}</td></tr>`; }
+}
+async function refreshStageProfiles(pane) {
+  const sel = elIn(pane, 'sl-profile');
+  try {
+    const profiles = await api('GET', '/api/profiles');
+    sel.innerHTML = '';
+    if (!profiles || !profiles.length) sel.appendChild(new Option('— no profiles —', ''));
+    else for (const p of profiles) sel.appendChild(new Option(p.Name, p.Name));
+  } catch { sel.innerHTML = ''; sel.appendChild(new Option('— error loading profiles —', '')); }
 }
 
 // ----- Profiles (Payloads > Implant Profiles) -----
