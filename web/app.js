@@ -1445,15 +1445,16 @@ async function loadProfiles(pane) {
 // ----- Implants (Payloads > Implant Builds) -----
 async function deleteSelectedImplants() {
   const tbody = document.querySelector('[data-el="implants-body"]');
-  const cbs = tbody ? Array.from(tbody.querySelectorAll('input[type="checkbox"]:checked')) : [];
+  if (!tbody) return;
+  const cbs = Array.from(tbody.querySelectorAll('input[type="checkbox"]:checked'));
   const toDelete = cbs.map(cb => cb.dataset.name);
-  if (!toDelete.length) { alert('Select implants to delete'); return; }
+  if (!toDelete.length) return;
   if (!confirm(`Delete ${toDelete.length} implant(s)?`)) return;
   for (const name of toDelete) {
-    try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch (e) { alert(`Failed: ${e.message}`); }
+    try { await api('DELETE', '/api/implants/' + encodeURIComponent(name)); } catch (e) { console.error(e); }
   }
   const pane = document.querySelector('.utilpane[data-tab="implants"]');
-  if (pane) loadImplants(pane);
+  if (pane) await loadImplants(pane);
 }
 function initImplantsPane(pane) {
   const selectAllCb = pane.querySelector('#implants-select-all');
