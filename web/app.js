@@ -956,7 +956,9 @@ function buildAgentPanel(id, rec) {
   root.classList.add('dpane', 'consolepane');
   root.dataset.tab = id;
   root.style.display = '';
-  STATE.panels[id] = { cwd: '/', history: [], historyIdx: -1 };
+  const os = (rec.a.OS || '').toLowerCase();
+  const cwd = os.includes('windows') ? 'C:\\' : '/';
+  STATE.panels[id] = { cwd, history: [], historyIdx: -1 };
 
   $$('.subtab', root).forEach((t) => t.onclick = () => switchSubtab(root, id, t.dataset.sub));
 
