@@ -1368,7 +1368,7 @@ function startEvents() {
   es.onmessage = (m) => {
     let ev; try { ev = JSON.parse(m.data); } catch { return; }
     logEvent(ev);
-    if (/session|beacon/i.test(ev.type)) loadAgents();
+    if (ev.session || ev.job || /session|beacon|connected|disconnected/i.test(ev.type)) loadAgents();
     if (/job/i.test(ev.type)) { const p = ensurePane('jobs'); if (p) loadJobs(p); }
   };
   es.onerror = () => {};
