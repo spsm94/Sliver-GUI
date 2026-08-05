@@ -865,6 +865,13 @@ async function runTermCommand(id, line, scroll) {
   const row = pushConsoleRow(scroll, entry);
   const cmd = line.split(/\s+/)[0].toLowerCase();
   if (cmd === 'clear') { scroll.innerHTML = ''; row.remove(); return; }
+  // socks5 is intercepted instead of being sent to the native console. The
+  // console runs a one-shot sliver-client that exits after each command, and a
+  // socks proxy's listening socket lives in the client that started it — so
+  // going down that path prints "Started SOCKS5" and then dies (see console.go).
+  // Route it to the typed API that hosts the proxy on the bridge, so the
+  // familiar command works and the proxy persists.
+  if (cmd === 'socks5' || cmd === 'socks') { row.remove(); await runSocksCommand(id, line, scroll); return; }
   if (cmd === 'help' || cmd === '?') {
     row.remove();
     pushConsoleRow(scroll, {
@@ -874,6 +881,10 @@ async function runTermCommand(id, line, scroll) {
         'download, upload, execute, execute-assembly, screenshot, kill, getsystem,\n' +
         'make-token, impersonate, procdump, hashdump, registry, execute-shellcode,\n' +
         'sideload, migrate, armory, profiles, loot, hosts, pivots.\n\n' +
+        'socks5 is handled by the bridge (the native console cannot host a proxy):\n' +
+        '  socks5                       list proxies this bridge hosts\n' +
+        '  socks5 start [-H h] [-P p] [-u user]   default 127.0.0.1:1081\n' +
+        '  socks5 stop -i <id>\n\n' +
         'Type "help <command>" or "<command> --help" for details.',
     });
     return;
@@ -888,12 +899,78 @@ async function runTermCommand(id, line, scroll) {
     pushConsoleRow(scroll, { cmd: line, err: err.message });
   }
 }
+// parseFlags reads `--flag value`, `--flag=value` and `-f value` the way the
+// Sliver CLI's flags behave. Keys keep their case so -H and -h stay distinct.
+function parseFlags(words) {
+  const out = {};
+  for (let i = 0; i < words.length; i++) {
+    const m = /^--?([A-Za-z][\w-]*)(?:=(.*))?$/.exec(words[i]);
+    if (!m) continue;
+    let val = m[2];
+    if (val === undefined) {
+      const next = words[i + 1];
+      val = next !== undefined && !next.startsWith('-') ? words[++i] : '';
+    }
+    out[m[1]] = val;
+  }
+  return out;
+}
+// runSocksCommand implements `socks5 start|stop|list` against the bridge-hosted
+// proxy API, mirroring the CLI's flags (-H/--host, -P/--port, -u/--user,
+// -i/--id) and its 127.0.0.1:1081 defaults.
+async function runSocksCommand(id, line, scroll) {
+  const words = line.split(/\s+/);
+  const sub = (words[1] || 'list').toLowerCase();
+  const f = parseFlags(words.slice(1));
+  const pick = (...names) => { for (const n of names) if (f[n]) return f[n]; return ''; };
+  const say = (out, err) => pushConsoleRow(scroll, { cmd: line, out, err });
+  const refreshPane = () => { const p = ensurePane(id); if (p) loadSocks(id, p); };
+  try {
+    if (sub === 'start') {
+      if (!id) { say(null, 'socks5 start needs a session — run it from a session tab, not the server console.'); return; }
+      const m = await api('POST', `/api/target/${id}/socks`, {
+        host: pick('host', 'H') || '127.0.0.1',
+        port: pick('port', 'P') || '1081',
+        user: pick('user', 'u'),
+      });
+      say(`Started SOCKS5 proxy ${m.BindAddr} (id ${m.ID})` +
+        (m.Password ? `\nauth: ${m.Username}:${m.Password}` : '') +
+        `\n\nHosted by the bridge, so it outlives this command and any page reload.` +
+        `\nStop it with: socks5 stop -i ${m.ID}`);
+      refreshPane();
+      return;
+    }
+    if (sub === 'stop') {
+      const sid = pick('id', 'i') || (words[2] && !words[2].startsWith('-') ? words[2] : '');
+      if (!sid) { say(null, 'usage: socks5 stop -i <id>   (run "socks5" to list ids)'); return; }
+      await api('DELETE', `/api/socks/${sid}`);
+      say(`Stopped SOCKS5 proxy ${sid}`);
+      refreshPane();
+      return;
+    }
+    if (sub === 'list' || sub === '') {
+      const all = await api('GET', '/api/socks') || [];
+      if (!all.length) {
+        say('No SOCKS5 proxies hosted by this bridge.\n\n' +
+          'Note: proxies started from the sliver CLI live in that client process and\n' +
+          'cannot be listed here — the server keeps no registry of them.\n\n' +
+          'Start one with: socks5 start [-H host] [-P port] [-u user]');
+        return;
+      }
+      const rows = all.map((s) => ` ${String(s.ID).padEnd(4)} ${s.BindAddr.padEnd(22)} ` +
+        `${(s.Username ? s.Username + ':' + s.Password : 'no auth').padEnd(24)} ${s.SessionID.slice(0, 8)}`);
+      say([' ID   Bind                   Auth                     Session', ...rows].join('\n'));
+      return;
+    }
+    say(null, `unknown subcommand "${sub}" — use: socks5 [list] | socks5 start [-H host] [-P port] [-u user] | socks5 stop -i <id>`);
+  } catch (e) { say(null, e.message); }
+}
 function completeCommand(input) {
   const text = input.value;
   const commands = ['sessions', 'beacons', 'use', 'info', 'jobs', 'generate', 'ls', 'cd', 'ps',
     'download', 'upload', 'execute', 'execute-assembly', 'screenshot', 'kill', 'getsystem',
     'make-token', 'impersonate', 'procdump', 'hashdump', 'registry', 'execute-shellcode',
-    'sideload', 'migrate', 'armory', 'profiles', 'loot', 'hosts', 'pivots', 'help'];
+    'sideload', 'migrate', 'armory', 'profiles', 'loot', 'hosts', 'pivots', 'socks5', 'help'];
   const words = text.split(/\s+/);
   const partial = words[words.length - 1];
   if (!partial) return;
