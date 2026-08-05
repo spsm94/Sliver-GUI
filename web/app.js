@@ -734,7 +734,10 @@ function showAgentMenu(id, x, y) {
     </div>
     <div class="cx-item">
       <button ${dead || !canPivot ? 'disabled' : ''}>Pivoting <span class="arrow">&#9656;</span></button>
-      <div class="submenu"><button data-a="pivots" ${dead || !canPivot ? 'disabled' : ''}>Start Pivot Listener&hellip;</button></div>
+      <div class="submenu">
+        <button data-a="pivots" ${dead || !canPivot ? 'disabled' : ''}>Start Pivot Listener&hellip;</button>
+        <button data-a="socks" ${dead || !canPivot ? 'disabled' : ''}>Start SOCKS5 Proxy&hellip;</button>
+      </div>
     </div>
     <hr>
     <button data-a="remove">Remove</button>
@@ -766,7 +769,8 @@ async function runAgentAction(id, action) {
     case 'processes': openAgentConsole(id, 'processes'); break;
     case 'network': openAgentConsole(id, 'network'); break;
     case 'screenshot': openAgentConsole(id, 'screenshot'); break;
-    case 'pivots': openAgentConsole(id, 'pivots'); break;
+    case 'pivots':
+    case 'socks': openAgentConsole(id, 'pivots'); break;
     case 'remove':
     case 'kill': {
       const verb = action === 'kill' ? 'Kill' : 'Remove';
@@ -1036,6 +1040,20 @@ function buildAgentPanel(id, rec) {
     } catch (e) { msg.textContent = 'error: ' + e.message; }
   };
 
+  // ---- socks5 ----
+  elIn(root, 'socks-start').onclick = async () => {
+    const host = elIn(root, 'socks-host').value.trim();
+    const port = elIn(root, 'socks-port').value.trim();
+    const user = elIn(root, 'socks-user').value.trim();
+    const msg = elIn(root, 'socks-msg');
+    msg.textContent = 'starting…';
+    try {
+      const m = await api('POST', `/api/target/${id}/socks`, { host, port, user });
+      msg.textContent = 'listening on ' + m.BindAddr + (m.Password ? ` (${m.Username}:${m.Password})` : '');
+      loadSocks(id, root);
+    } catch (e) { msg.textContent = 'error: ' + e.message; }
+  };
+
   // ---- info ----
   elIn(root, 'info-rename').onclick = () => renameAgent(id, root);
   elIn(root, 'info-rename-reset').onclick = () => resetAgentName(id, root);
@@ -1052,7 +1070,7 @@ function switchSubtab(root, id, name) {
   if (name === 'files') fileRefresh(id, root);
   else if (name === 'processes') loadProcs(id, root);
   else if (name === 'network') loadNet(id, root);
-  else if (name === 'pivots') loadPivots(id, root);
+  else if (name === 'pivots') { loadPivots(id, root); loadSocks(id, root); }
   else if (name === 'info') renderInfo(id, root);
   else if (name === 'terminal') elIn(root, 'term-cmd').focus();
 }
@@ -1172,6 +1190,32 @@ async function loadPivots(id, root) {
       stop.onclick = async () => {
         if (!confirm(`Stop pivot ${p.ID}?`)) return;
         try { await api('DELETE', `/api/target/${id}/pivots/${p.ID}`); loadPivots(id, root); } catch (e) { alert(e.message); }
+      };
+      row.lastElementChild.appendChild(stop);
+      body.appendChild(row);
+    }
+  } catch (e) { body.innerHTML = `<tr><td colspan="5" class="err">${esc(e.message)}</td></tr>`; }
+}
+
+// ----- socks5 (hosted by the bridge, filtered to this session) -----
+async function loadSocks(id, root) {
+  const body = elIn(root, 'socks-body');
+  body.innerHTML = '<tr><td colspan="5" class="muted">loading…</td></tr>';
+  try {
+    const all = await api('GET', '/api/socks');
+    const mine = (all || []).filter((s) => s.SessionID === id);
+    if (!mine.length) { body.innerHTML = '<tr><td colspan="5" class="muted">no active socks5 proxies</td></tr>'; return; }
+    body.innerHTML = '';
+    for (const s of mine) {
+      const row = el('tr');
+      row.innerHTML =
+        `<td class="mono">${s.ID}</td><td class="mono">${esc(s.BindAddr)}</td>` +
+        `<td class="mono">${s.Username ? esc(s.Username + ':' + s.Password) : 'none'}</td>` +
+        `<td class="mono">${esc(s.SessionID.slice(0, 8))}</td><td></td>`;
+      const stop = el('button', 'btn danger xs', 'stop');
+      stop.onclick = async () => {
+        if (!confirm(`Stop socks5 proxy ${s.ID} (${s.BindAddr})?`)) return;
+        try { await api('DELETE', `/api/socks/${s.ID}`); loadSocks(id, root); } catch (e) { alert(e.message); }
       };
       row.lastElementChild.appendChild(stop);
       body.appendChild(row);

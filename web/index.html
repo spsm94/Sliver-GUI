@@ -185,6 +185,40 @@
           </table>
         </div>
       </div>
+
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:18px 0">
+
+      <p class="page-sub">A SOCKS5 proxy tunnels traffic from the <em>bridge host</em> through this session.
+        Point proxychains at the bind address below. The proxy is hosted by sliver-web-gui itself, so it
+        survives browser reloads and runs until stopped or the bridge restarts. Sessions only.</p>
+      <div class="section">
+        <h2>Start SOCKS5 proxy</h2>
+        <div class="card">
+          <div class="grid2">
+            <label class="field"><span class="lbl">Bind host (on bridge host)</span>
+              <input data-el="socks-host" class="mono" value="127.0.0.1" placeholder="127.0.0.1">
+            </label>
+            <label class="field"><span class="lbl">Port</span>
+              <input data-el="socks-port" class="mono" value="1080" placeholder="1080">
+            </label>
+          </div>
+          <label class="field"><span class="lbl">Username (optional &mdash; enables proxy auth, password is generated)</span>
+            <input data-el="socks-user" class="mono" placeholder="none">
+          </label>
+          <span class="warn-note">Proxy credentials are tunnelled to the implant and recoverable from its memory.</span>
+          <button class="btn emerald sm" data-el="socks-start" style="margin-top:8px">start socks5</button>
+          <span data-el="socks-msg" style="margin-left:12px"></span>
+        </div>
+      </div>
+      <div class="section">
+        <h2>Active SOCKS5 proxies</h2>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>ID</th><th>Bind</th><th>Auth</th><th>Session</th><th></th></tr></thead>
+            <tbody data-el="socks-body"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div class="subpane scroll" data-pane="info">
@@ -564,7 +598,8 @@
       <div class="tbl-wrap"><table class="tbl help-tbl">
         <thead><tr><th>Command</th><th>What it does</th><th>Cobalt Strike</th></tr></thead>
         <tbody>
-          <tr><td class="mono">socks5</td><td>Start a SOCKS5 proxy through the implant</td><td class="mono">socks</td></tr>
+          <tr><td class="mono">socks5</td><td>Start a SOCKS5 proxy through the implant &mdash; use the session's
+            <strong>Pivoting</strong> tab, not the console (a console-started proxy dies when the command returns)</td><td class="mono">socks</td></tr>
           <tr><td class="mono">portfwd</td><td>Forward a local port through the implant to a remote host</td><td>tunnel / portfwd</td></tr>
           <tr><td class="mono">rportfwd</td><td>Reverse port forward (implant listens, tunnels back)</td><td class="mono">rportfwd</td></tr>
           <tr><td class="mono">pivots</td><td>Named-pipe (Windows) / TCP pivot listeners to chain implants</td><td>SMB / TCP beacon (link / connect)</td></tr>

@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bishopfox/sliver/client/assets"
+	"github.com/bishopfox/sliver/client/core"
 	"github.com/bishopfox/sliver/client/transport"
 	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/commonpb"
@@ -267,6 +271,88 @@ func (s *Sliver) StopPivot(sessionID string, id uint32) error {
 	defer cancel()
 	_, err := s.rpc.PivotStopListener(ctx, &sliverpb.PivotStopListenerReq{ID: id, Request: s.sessionRequest(sessionID)})
 	return err
+}
+
+// ---- SOCKS5 ----
+// A socks5 proxy is *client*-tunnelled: the listening socket lives in whichever
+// client started it and every connection is relayed over that client's gRPC
+// stream. The native console can't host one, because its one-shot
+// `sliver-client` exits the moment the command returns and takes the listener
+// with it (see console.go). So the bridge runs the proxy itself, on its own
+// long-lived connection — which also means the proxy survives browser reloads
+// and lives as long as the sliver-web-gui service.
+
+// sessionByID fetches the full clientpb.Session that core.TcpProxy needs.
+func (s *Sliver) sessionByID(sessionID string) (*clientpb.Session, error) {
+	sessions, err := s.Sessions()
+	if err != nil {
+		return nil, err
+	}
+	for _, sess := range sessions {
+		if sess.ID == sessionID {
+			return sess, nil
+		}
+	}
+	return nil, fmt.Errorf("no live session %s (socks5 needs a session, not a beacon)", sessionID)
+}
+
+// StartSocks opens a socks5 listener on the bridge host and tunnels it through
+// the given session. host/port default to 127.0.0.1:1080. A non-empty username
+// enables proxy auth with a generated password, which is returned to the caller.
+func (s *Sliver) StartSocks(sessionID, host, port, username string) (*core.SocksProxyMeta, error) {
+	sess, err := s.sessionByID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if port == "" {
+		port = "1080"
+	}
+	bindAddr := net.JoinHostPort(host, port)
+	ln, err := net.Listen("tcp", bindAddr)
+	if err != nil {
+		return nil, fmt.Errorf("socks5 listen %s: %w", bindAddr, err)
+	}
+	password := ""
+	if username != "" {
+		// Credentials are tunnelled to the implant and recoverable from its
+		// memory — the CLI warns about this; the GUI shows the same warning.
+		buf := make([]byte, 16)
+		if _, err := rand.Read(buf); err != nil {
+			ln.Close()
+			return nil, err
+		}
+		password = base64.RawStdEncoding.EncodeToString(buf)
+	}
+	proxy := core.SocksProxies.Add(&core.TcpProxy{
+		Rpc:             s.rpc,
+		Session:         sess,
+		Listener:        ln,
+		BindAddr:        bindAddr,
+		Username:        username,
+		Password:        password,
+		KeepAlivePeriod: 60 * time.Second,
+		DialTimeout:     30 * time.Second,
+	})
+	go core.SocksProxies.Start(proxy.ChannelProxy)
+	return proxy.GetMetadata(), nil
+}
+
+// SocksList returns every socks5 proxy this bridge is currently hosting.
+func (s *Sliver) SocksList() []*core.SocksProxyMeta {
+	list := core.SocksProxies.List()
+	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+	return list
+}
+
+// StopSocks closes a socks5 proxy's listener and all of its connections.
+func (s *Sliver) StopSocks(id uint64) error {
+	if !core.SocksProxies.Remove(id) {
+		return fmt.Errorf("no socks5 proxy with id %d", id)
+	}
+	return nil
 }
 
 // ---- Target (session) interaction ----

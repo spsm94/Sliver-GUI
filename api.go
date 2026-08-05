@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +70,11 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/target/{id}/pivots", hPivotListeners)
 	mux.HandleFunc("POST /api/target/{id}/pivots", hStartPivot)
 	mux.HandleFunc("DELETE /api/target/{id}/pivots/{pid}", hStopPivot)
+
+	// socks5 (client-tunnelled proxy, hosted by this bridge — see sliver.go)
+	mux.HandleFunc("GET /api/socks", hSocksList)
+	mux.HandleFunc("POST /api/target/{id}/socks", hStartSocks)
+	mux.HandleFunc("DELETE /api/socks/{sid}", hStopSocks)
 
 	mux.HandleFunc("POST /api/generate", hGenerate)
 
@@ -737,6 +743,47 @@ func hStartPivot(w http.ResponseWriter, r *http.Request) {
 // hStopPivot stops a pivot listener (by listener ID) on a session.
 func hStopPivot(w http.ResponseWriter, r *http.Request) {
 	if err := sliver.StopPivot(r.PathValue("id"), atoiU32(r.PathValue("pid"))); err != nil {
+		writeErr(w, err, 502)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// hSocksList lists the socks5 proxies this bridge is hosting.
+func hSocksList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, sliver.SocksList())
+}
+
+// hStartSocks opens a socks5 listener on the bridge host, tunnelled through a
+// session. The proxy lives in this process, so it persists across browser
+// reloads and stops only when removed or when the bridge restarts.
+func hStartSocks(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Host string `json:"host"`
+		Port string `json:"port"`
+		User string `json:"user"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err, 400)
+		return
+	}
+	meta, err := sliver.StartSocks(r.PathValue("id"),
+		strings.TrimSpace(in.Host), strings.TrimSpace(in.Port), strings.TrimSpace(in.User))
+	if err != nil {
+		writeErr(w, err, 502)
+		return
+	}
+	writeJSON(w, meta)
+}
+
+// hStopSocks closes a socks5 proxy and every connection through it.
+func hStopSocks(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseUint(r.PathValue("sid"), 10, 64)
+	if err != nil {
+		writeErr(w, fmt.Errorf("bad socks id %q", r.PathValue("sid")), 400)
+		return
+	}
+	if err := sliver.StopSocks(id); err != nil {
 		writeErr(w, err, 502)
 		return
 	}

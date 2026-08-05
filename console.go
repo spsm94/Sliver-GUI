@@ -22,10 +22,14 @@ import (
 // pivots, etc. — with the exact semantics and output the CLI produces.
 //
 // Caveat: a one-shot console exits after the command, so commands whose effect
-// is bound to the *client* connection (socks5, portfwd/rportfwd, interactive
-// `shell`) do not persist — those need a long-lived tunnel (a separate,
-// persistent-console feature). Request/response tasking and server-side jobs
-// (listeners, pivots, generate, armory) are unaffected.
+// is bound to the *client* connection (portfwd/rportfwd, interactive `shell`)
+// do not persist — those need a long-lived tunnel. Request/response tasking and
+// server-side jobs (listeners, pivots, generate, armory) are unaffected.
+//
+// socks5 was in that broken set: `socks5 start` here appeared to succeed and
+// then died with the client. It is now a typed feature hosted on the bridge's
+// own persistent gRPC connection (see Sliver.StartSocks) and driven from the
+// session's Pivoting tab, so it outlives any one command or browser reload.
 
 // operatorConfigPath is the .cfg the bridge authenticates with (set from main).
 // The native console reuses it so it speaks as the same operator.
