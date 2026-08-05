@@ -138,8 +138,7 @@ function preferredV4() {
 async function loadInterfaces() {
   try { STATE.interfaces = await api('GET', '/api/interfaces'); } catch { STATE.interfaces = []; }
   fillIfaceSelect($('#mlHost'), { allInterfaces: true, v4only: true, default: '0.0.0.0' });
-  fillDatalist($('#mgHostList'), { v4only: true });
-  if (!$('#mgHost').value) $('#mgHost').value = preferredV4();
+  fillIfaceSelect($('#mgHost'), { v4only: true, default: preferredV4() });
   fillIfaceSelect($('#msHost'), { allInterfaces: true, v4only: true, default: '0.0.0.0' });
   updateBindWarning();
 }
@@ -1848,6 +1847,8 @@ async function loadDirBrowser(path) {
   } catch (e) { msg.textContent = e.message; list.innerHTML = ''; }
 }
 $('#mgBrowse').onclick = () => openDirBrowser($('#mgSavedir'));
+$('#mlRefresh').onclick = loadInterfaces;
+$('#mgRefresh').onclick = loadInterfaces;
 $('#dirbrowser-close').onclick = closeDirBrowser;
 $('#dirbrowser-up').onclick = () => { if (DIRB.parent) loadDirBrowser(DIRB.parent); };
 $('#dirbrowser-select').onclick = () => { if (DIRB.targetInput && DIRB.current) DIRB.targetInput.value = DIRB.current; closeDirBrowser(); };

@@ -613,7 +613,10 @@
       </label>
       <div class="grid2">
         <label class="field" style="margin:0"><span class="lbl">Bind host (interface → IP)</span>
-          <select id="mlHost" class="mono"></select>
+          <div style="display:flex;gap:4px">
+            <select id="mlHost" class="mono" style="flex:1"></select>
+            <button type="button" class="btn ghost sm" id="mlRefresh" title="Refresh interfaces">⟳</button>
+          </div>
         </label>
         <label class="field" style="margin:0"><span class="lbl">Port</span><input id="mlPort" class="mono" placeholder="8888"></label>
       </div>
@@ -631,9 +634,11 @@
         <select id="mgListener"></select>
       </label>
       <div class="grid2" id="mgC2HostPortRow">
-        <label class="field" style="margin:0"><span class="lbl">C2 host (auto-filled when known — HTTP/S jobs don't report theirs, verify it)</span>
-          <input id="mgHost" class="mono" list="mgHostList" placeholder="10.10.14.2 or cdn.example.com">
-          <datalist id="mgHostList"></datalist>
+        <label class="field" style="margin:0"><span class="lbl">C2 host</span>
+          <div style="display:flex;gap:4px">
+            <select id="mgHost" class="mono" style="flex:1"></select>
+            <button type="button" class="btn ghost sm" id="mgRefresh" title="Refresh interfaces">⟳</button>
+          </div>
         </label>
         <label class="field" style="margin:0"><span class="lbl">C2 port</span><input id="mgPort" class="mono" type="number" placeholder="8888"></label>
       </div>
