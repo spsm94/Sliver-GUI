@@ -725,14 +725,15 @@ func hPivotListeners(w http.ResponseWriter, r *http.Request) {
 // hStartPivot starts a tcp or named-pipe pivot listener on a session.
 func hStartPivot(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Type string `json:"type"` // tcp | named-pipe
-		Bind string `json:"bind"`
+		Type     string `json:"type"` // tcp | named-pipe
+		Bind     string `json:"bind"`
+		AllowAll bool   `json:"allowAll"` // named-pipe only
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err, 400)
 		return
 	}
-	pl, err := sliver.StartPivot(r.PathValue("id"), in.Type, strings.TrimSpace(in.Bind))
+	pl, err := sliver.StartPivot(r.PathValue("id"), in.Type, strings.TrimSpace(in.Bind), in.AllowAll)
 	if err != nil {
 		writeErr(w, err, 502)
 		return

@@ -222,6 +222,13 @@ func (s *Sliver) sessionRequest(sessionID string) *commonpb.Request {
 	return &commonpb.Request{Timeout: int64(callTimeout), Async: false, SessionID: sessionID}
 }
 
+// Note on implant-side errors: pivot RPCs are always synchronous (see
+// sessionRequest), and for sync requests the server's GenericHandler already
+// converts a non-empty Response.Err into a FailedPrecondition gRPC error before
+// it reaches us. So checking `err` here is sufficient — the implant's real
+// reason ("bind: Only one usage of each socket address...") arrives in it. The
+// CLI's extra Response.Err check is belt-and-braces for the same path.
+
 // PivotGraph returns the server-wide tree of pivoted sessions.
 func (s *Sliver) PivotGraph() (*clientpb.PivotGraph, error) {
 	ctx, cancel := ctxTimeout()
@@ -241,28 +248,43 @@ func (s *Sliver) PivotListeners(sessionID string) ([]*sliverpb.PivotListener, er
 }
 
 // StartPivot starts a tcp or named-pipe pivot listener on a session. bind is the
-// listener's bind address: an ip[:port] for tcp (default port 9898 if omitted),
-// or a pipe name for named-pipe.
-func (s *Sliver) StartPivot(sessionID, pivotType, bind string) (*sliverpb.PivotListener, error) {
+// listener's bind address: an ip[:port] for tcp, or a pipe name for named-pipe.
+// allowAll applies to named pipes only: it opens the pipe's DACL to everyone,
+// which downstream implants running as a different user or machine account need
+// in order to connect (the CLI spells this --allow-all).
+func (s *Sliver) StartPivot(sessionID, pivotType, bind string, allowAll bool) (*sliverpb.PivotListener, error) {
 	var t sliverpb.PivotType
+	var opts []bool
 	switch strings.ToLower(pivotType) {
 	case "tcp", "":
 		t = sliverpb.PivotType_TCP
-		if bind != "" && !strings.Contains(bind, ":") {
+		// The implant hands BindAddress straight to net.Listen, where an empty
+		// string means "all interfaces, kernel-chosen port". That silently
+		// yields a listener on a random port no generated payload can reach, so
+		// always send an explicit host:port the way the CLI does.
+		if bind == "" {
+			bind = ":9898"
+		} else if !strings.Contains(bind, ":") {
 			bind += ":9898"
 		}
 	case "named-pipe", "namedpipe", "pipe":
 		t = sliverpb.PivotType_NamedPipe
+		opts = []bool{allowAll}
 	default:
 		return nil, fmt.Errorf("unknown pivot type %q (want tcp or named-pipe)", pivotType)
 	}
 	ctx, cancel := ctxTimeout()
 	defer cancel()
-	return s.rpc.PivotStartListener(ctx, &sliverpb.PivotStartListenerReq{
+	resp, err := s.rpc.PivotStartListener(ctx, &sliverpb.PivotStartListenerReq{
 		Type:        t,
 		BindAddress: bind,
+		Options:     opts,
 		Request:     s.sessionRequest(sessionID),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // StopPivot stops a pivot listener (by its listener ID) on a session.

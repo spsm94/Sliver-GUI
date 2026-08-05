@@ -172,7 +172,12 @@
               <input data-el="pivot-bind" class="mono" placeholder="tcp: 0.0.0.0:9898 &middot; pipe: \\.\pipe\Name">
             </label>
           </div>
-          <button class="btn emerald sm" data-el="pivot-start">start pivot</button>
+          <label class="field" data-el="pivot-allowall-field" style="display:none;margin-top:8px">
+            <span><input type="checkbox" data-el="pivot-allowall"> Allow all users to connect</span>
+            <span class="lbl">Named pipes only &mdash; opens the pipe DACL to everyone. Downstream implants
+              running as a different user or machine account need this to connect.</span>
+          </label>
+          <button class="btn emerald sm" data-el="pivot-start" style="margin-top:8px">start pivot</button>
           <span data-el="pivot-msg" style="margin-left:12px"></span>
         </div>
       </div>

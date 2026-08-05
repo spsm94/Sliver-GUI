@@ -1026,17 +1026,27 @@ function buildAgentPanel(id, rec) {
   elIn(root, 'shot-capture').onclick = () => captureScreenshot(id, root);
 
   // ---- pivots ----
+  // allow-all is a named-pipe DACL option; hide it for tcp so it can't imply
+  // it does something there.
+  const pivotType = elIn(root, 'pivot-type');
+  const syncPivotType = () => {
+    elIn(root, 'pivot-allowall-field').style.display = pivotType.value === 'named-pipe' ? '' : 'none';
+  };
+  pivotType.onchange = syncPivotType;
+  syncPivotType();
+
   elIn(root, 'pivot-start').onclick = async () => {
-    const type = elIn(root, 'pivot-type').value;
+    const type = pivotType.value;
     const bind = elIn(root, 'pivot-bind').value.trim();
-    if (!bind && type === 'tcp') { alert('TCP: specify bind address (e.g. 0.0.0.0:9898)'); return; }
+    if (!bind && type === 'named-pipe') { alert('Named pipe: specify a pipe name (e.g. \\\\.\\pipe\\MySliver)'); return; }
+    const allowAll = elIn(root, 'pivot-allowall').checked;
     const msg = elIn(root, 'pivot-msg');
     msg.textContent = 'starting…';
     try {
-      await api('POST', `/api/target/${id}/pivots`, { type, bind });
-      msg.textContent = 'started';
+      const pl = await api('POST', `/api/target/${id}/pivots`, { type, bind, allowAll });
+      msg.textContent = 'listening on ' + (pl.BindAddress || bind);
       elIn(root, 'pivot-bind').value = '';
-      setTimeout(() => { msg.textContent = ''; loadPivots(id, root); }, 1000);
+      loadPivots(id, root);
     } catch (e) { msg.textContent = 'error: ' + e.message; }
   };
 
