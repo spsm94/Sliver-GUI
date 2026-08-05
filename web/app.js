@@ -1481,7 +1481,7 @@ function openUtilTab(key) {
   let pane = ensurePane(key);
   if (!pane) {
     const tpl = $(`#util-${key}-tpl`);
-    const label = { log: 'Event Log', jobs: 'Listeners', stagelisteners: 'Stage Listeners', profiles: 'Profiles', implants: 'Implants', pivotgraph: 'Proxy Pivots', help: 'Help' }[key];
+    const label = { log: 'Event Log', jobs: 'Listeners', stagelisteners: 'Stage Listeners', profiles: 'Profiles', implants: 'Implants', pivotgraph: 'Proxy Pivots', ligolo: 'Ligolo', help: 'Help' }[key];
     if (tpl) {
       const frag = tpl.content.cloneNode(true);
       pane = frag.firstElementChild;
@@ -1497,6 +1497,7 @@ function openUtilTab(key) {
     else if (key === 'profiles') initProfilesPane(pane);
     else if (key === 'implants') initImplantsPane(pane);
     else if (key === 'pivotgraph') initPivotGraphPane(pane);
+    else if (key === 'ligolo') initLigoloPane(pane);
   }
   activateTab(key);
   if (key === 'jobs') loadJobs(pane);
@@ -1504,6 +1505,237 @@ function openUtilTab(key) {
   else if (key === 'profiles') loadProfiles(pane);
   else if (key === 'implants') loadImplants(pane);
   else if (key === 'pivotgraph') loadPivotGraphTable(pane);
+  else if (key === 'ligolo') loadLigolo(pane);
+}
+
+// =====================================================================
+// Ligolo tunnels — drives an external ligolo-ng proxy through the bridge's
+// /api/ligolo/* passthrough. Ligolo routes a target's subnets onto a TUN
+// interface on this host, so tools run unmodified (no proxychains).
+// =====================================================================
+function initLigoloPane(pane) {
+  elIn(pane, 'lg-refresh').onclick = () => loadLigolo(pane);
+
+  elIn(pane, 'lg-iface-add').onclick = async () => {
+    const name = elIn(pane, 'lg-iface-name').value.trim();
+    const msg = elIn(pane, 'lg-iface-msg');
+    if (!name) { msg.className = 'err'; msg.textContent = 'name required'; return; }
+    msg.className = 'muted mono'; msg.textContent = 'creating…';
+    try {
+      await api('POST', '/api/ligolo/interfaces', { interface: name });
+      msg.className = 'ok'; msg.textContent = 'created';
+      elIn(pane, 'lg-iface-name').value = '';
+      loadLigolo(pane);
+    } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
+  };
+
+  elIn(pane, 'lg-route-add').onclick = async () => {
+    const iface = elIn(pane, 'lg-route-iface').value;
+    const routes = elIn(pane, 'lg-route-cidr').value.trim();
+    const msg = elIn(pane, 'lg-route-msg');
+    if (!iface) { msg.className = 'err'; msg.textContent = ' create an interface first'; return; }
+    if (!routes) { msg.className = 'err'; msg.textContent = ' enter at least one CIDR'; return; }
+    msg.className = 'muted mono'; msg.textContent = ' adding…';
+    try {
+      await api('POST', '/api/ligolo/routes', { interface: iface, routes });
+      msg.className = 'ok'; msg.textContent = ' added';
+      elIn(pane, 'lg-route-cidr').value = '';
+      loadLigolo(pane);
+    } catch (e) { msg.className = 'err'; msg.textContent = ' ' + e.message; }
+  };
+
+  elIn(pane, 'lg-lsn-add').onclick = async () => {
+    const agentId = parseInt(elIn(pane, 'lg-lsn-agent').value, 10);
+    const msg = elIn(pane, 'lg-lsn-msg');
+    if (isNaN(agentId)) { msg.className = 'err'; msg.textContent = ' no agent selected'; return; }
+    const listenerAddr = elIn(pane, 'lg-lsn-listen').value.trim();
+    const redirectAddr = elIn(pane, 'lg-lsn-redirect').value.trim();
+    if (!listenerAddr || !redirectAddr) { msg.className = 'err'; msg.textContent = ' both addresses required'; return; }
+    msg.className = 'muted mono'; msg.textContent = ' adding…';
+    try {
+      await api('POST', '/api/ligolo/listeners', {
+        agentId, network: elIn(pane, 'lg-lsn-network').value, listenerAddr, redirectAddr,
+      });
+      msg.className = 'ok'; msg.textContent = ' added';
+      loadLigolo(pane);
+    } catch (e) { msg.className = 'err'; msg.textContent = ' ' + e.message; }
+  };
+}
+
+// loadLigolo checks the proxy is reachable before loading anything else, so a
+// stopped proxy shows one clear message instead of four failed tables.
+async function loadLigolo(pane) {
+  const text = elIn(pane, 'lg-status-text');
+  const body = elIn(pane, 'lg-body');
+  text.className = 'mono'; text.textContent = 'checking ligolo proxy…';
+  let st;
+  try { st = await api('GET', '/api/ligolo/status'); }
+  catch (e) { text.className = 'mono err'; text.textContent = e.message; body.style.display = 'none'; return; }
+  if (!st.ok) {
+    body.style.display = 'none';
+    text.className = 'mono err';
+    text.textContent = st.configured
+      ? `ligolo proxy unreachable — ${st.error}`
+      : 'ligolo not configured — restart sliver-web-gui with -ligolo-url http://127.0.0.1:8080 -ligolo-pass <password>';
+    return;
+  }
+  text.className = 'mono ok';
+  text.textContent = `ligolo proxy up at ${st.url}`;
+  body.style.display = '';
+  await Promise.all([loadLigoloAgents(pane), loadLigoloIfaces(pane), loadLigoloListeners(pane)]);
+}
+
+async function loadLigoloAgents(pane) {
+  const tbody = elIn(pane, 'lg-agents-body');
+  const sel = elIn(pane, 'lg-lsn-agent');
+  tbody.innerHTML = '<tr><td colspan="6" class="muted">loading…</td></tr>';
+  try {
+    const agents = await api('GET', '/api/ligolo/agents') || [];
+    const prev = sel.value;
+    sel.innerHTML = '';
+    if (!agents.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="muted">no agents connected — deploy one on a target ' +
+        'so it connects back to the ligolo proxy</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    for (const a of agents) {
+      // Show the agent's own subnets — these are what you'd route through the tunnel.
+      const nets = (a.Network || [])
+        .flatMap((n) => (n.Addresses || []).map((ip) => `${n.Name} ${ip}`))
+        .filter((s) => !/ 127\.|::1|\/128$/.test(s));
+      const tr = el('tr');
+      tr.innerHTML = `<td class="mono">${a.ID}</td><td>${esc(a.Name || '—')}</td>` +
+        `<td class="mono" style="font-size:11px">${nets.length ? esc(nets.join('\n')) : '—'}</td>` +
+        `<td class="mono">${esc(a.Interface || '—')}</td>` +
+        `<td>${a.Running ? '<span class="ok">running</span>' : '<span class="muted">stopped</span>'}</td><td></td>`;
+      tr.querySelector('td:nth-child(3)').style.whiteSpace = 'pre-line';
+      const acts = tr.lastElementChild;
+      if (a.Running) {
+        const stop = el('button', 'btn danger sm', 'stop tunnel');
+        stop.onclick = async () => {
+          try { await api('DELETE', `/api/ligolo/tunnel/${a.ID}`); loadLigolo(pane); } catch (e) { alert(e.message); }
+        };
+        acts.appendChild(stop);
+      } else {
+        const start = el('button', 'btn emerald sm', 'start tunnel');
+        start.onclick = async () => {
+          const iface = await pickLigoloIface(pane);
+          if (!iface) return;
+          try { await api('POST', `/api/ligolo/tunnel/${a.ID}`, { interface: iface }); loadLigolo(pane); }
+          catch (e) { alert(e.message); }
+        };
+        acts.appendChild(start);
+      }
+      tbody.appendChild(tr);
+      sel.appendChild(new Option(`${a.ID} — ${a.Name || 'agent'}`, String(a.ID)));
+    }
+    if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" class="err">${esc(e.message)}</td></tr>`; }
+}
+
+// LIGOLO_IFACES caches the interface names last seen, so the tunnel-start prompt
+// can offer them without another round trip.
+let LIGOLO_IFACES = [];
+async function pickLigoloIface(pane) {
+  if (!LIGOLO_IFACES.length) { alert('Create a TUN interface first.'); return null; }
+  if (LIGOLO_IFACES.length === 1) return LIGOLO_IFACES[0];
+  const name = prompt('Start tunnel on which interface?\n\n' + LIGOLO_IFACES.join('\n'), LIGOLO_IFACES[0]);
+  return name && LIGOLO_IFACES.includes(name.trim()) ? name.trim() : null;
+}
+
+// ligoloIfaceRows normalises the proxy's interface state, whose exact shape is
+// version-dependent: it may be a map of name -> routes, or a list of objects.
+function ligoloIfaceRows(data) {
+  const rows = [];
+  if (!data) return rows;
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      if (typeof item === 'string') { rows.push({ name: item, routes: [] }); continue; }
+      const name = item.Interface || item.Name || item.name || '';
+      const routes = item.Routes || item.routes || item.Route || [];
+      if (name) rows.push({ name, routes: Array.isArray(routes) ? routes : [routes] });
+    }
+    return rows;
+  }
+  if (typeof data === 'object') {
+    for (const [name, val] of Object.entries(data)) {
+      let routes = [];
+      if (Array.isArray(val)) routes = val;
+      else if (val && typeof val === 'object') routes = val.Routes || val.routes || [];
+      rows.push({ name, routes: Array.isArray(routes) ? routes : [] });
+    }
+  }
+  return rows;
+}
+
+async function loadLigoloIfaces(pane) {
+  const tbody = elIn(pane, 'lg-ifaces-body');
+  const sel = elIn(pane, 'lg-route-iface');
+  tbody.innerHTML = '<tr><td colspan="3" class="muted">loading…</td></tr>';
+  try {
+    const rows = ligoloIfaceRows(await api('GET', '/api/ligolo/interfaces'));
+    LIGOLO_IFACES = rows.map((r) => r.name);
+    const prev = sel.value;
+    sel.innerHTML = '';
+    for (const r of rows) sel.appendChild(new Option(r.name, r.name));
+    if (prev && LIGOLO_IFACES.includes(prev)) sel.value = prev;
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="3" class="muted">no interfaces — create one above</td></tr>'; return; }
+    tbody.innerHTML = '';
+    for (const r of rows) {
+      const tr = el('tr');
+      tr.innerHTML = `<td class="mono">${esc(r.name)}</td><td class="mono" style="font-size:11px"></td><td></td>`;
+      const routeCell = tr.children[1];
+      if (!r.routes.length) routeCell.innerHTML = '<span class="muted">no routes</span>';
+      for (const route of r.routes) {
+        const chip = el('span');
+        chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin:0 6px 4px 0';
+        chip.appendChild(el('span', 'mono', route));
+        const del = el('button', 'btn ghost xs', '×');
+        del.title = 'delete route';
+        del.onclick = async () => {
+          try { await api('DELETE', '/api/ligolo/routes', { interface: r.name, route }); loadLigolo(pane); }
+          catch (e) { alert(e.message); }
+        };
+        chip.appendChild(del);
+        routeCell.appendChild(chip);
+      }
+      const del = el('button', 'btn danger sm', 'delete');
+      del.onclick = async () => {
+        if (!confirm(`Delete interface ${r.name} and its routes?`)) return;
+        try { await api('DELETE', '/api/ligolo/interfaces', { interface: r.name }); loadLigolo(pane); }
+        catch (e) { alert(e.message); }
+      };
+      tr.lastElementChild.appendChild(del);
+      tbody.appendChild(tr);
+    }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="3" class="err">${esc(e.message)}</td></tr>`; }
+}
+
+async function loadLigoloListeners(pane) {
+  const tbody = elIn(pane, 'lg-lsn-body');
+  tbody.innerHTML = '<tr><td colspan="7" class="muted">loading…</td></tr>';
+  try {
+    const list = await api('GET', '/api/ligolo/listeners') || [];
+    if (!list.length) { tbody.innerHTML = '<tr><td colspan="7" class="muted">no agent listeners</td></tr>'; return; }
+    tbody.innerHTML = '';
+    for (const l of list) {
+      const tr = el('tr');
+      tr.innerHTML = `<td class="mono">${l.ListenerID}</td><td>${esc(l.Agent || l.AgentID)}</td>` +
+        `<td class="mono">${esc(l.Network)}</td><td class="mono">${esc(l.ListenerAddr)}</td>` +
+        `<td class="mono">${esc(l.RedirectAddr)}</td>` +
+        `<td>${l.Online ? '<span class="ok">yes</span>' : '<span class="muted">no</span>'}</td><td></td>`;
+      const del = el('button', 'btn danger sm', 'delete');
+      del.onclick = async () => {
+        try {
+          await api('DELETE', '/api/ligolo/listeners', { agentId: l.AgentID, listenerId: l.ListenerID });
+          loadLigolo(pane);
+        } catch (e) { alert(e.message); }
+      };
+      tr.lastElementChild.appendChild(del);
+      tbody.appendChild(tr);
+    }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="7" class="err">${esc(e.message)}</td></tr>`; }
 }
 
 // ----- Event Log (pinned) -----
