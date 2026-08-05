@@ -906,6 +906,53 @@ function completeCommand(input) {
     input.value = words.join(' ');
   }
 }
+// ----- command history -----
+// Recall survives a page reload: the list lives in localStorage keyed by agent
+// id (the server console uses its own key), so an operator who refreshes mid-
+// engagement keeps everything they've typed against that target. Only the
+// commands are kept, not their output — transcripts can be megabytes and would
+// blow the storage quota.
+const HISTORY_MAX = 200;
+const histKey = (id) => 'swg.hist.' + (id || '__server__');
+function loadHistory(id) {
+  try {
+    const v = JSON.parse(localStorage.getItem(histKey(id)));
+    return Array.isArray(v) ? v.slice(-HISTORY_MAX) : [];
+  } catch { return []; }
+}
+function pushHistory(panel, id, line) {
+  // Skip consecutive duplicates, the way a shell does.
+  if (panel.history[panel.history.length - 1] !== line) panel.history.push(line);
+  if (panel.history.length > HISTORY_MAX) panel.history = panel.history.slice(-HISTORY_MAX);
+  panel.historyIdx = -1;
+  try { localStorage.setItem(histKey(id), JSON.stringify(panel.history)); } catch {}
+}
+// wireTerminalKeys attaches up/down recall and tab completion to a command input.
+function wireTerminalKeys(input, panel) {
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (panel.history.length === 0) return;
+      if (panel.historyIdx === -1) panel.historyIdx = panel.history.length - 1;
+      else if (panel.historyIdx > 0) panel.historyIdx--;
+      input.value = panel.history[panel.historyIdx];
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (panel.historyIdx === -1) return;
+      if (panel.historyIdx < panel.history.length - 1) {
+        panel.historyIdx++;
+        input.value = panel.history[panel.historyIdx];
+      } else {
+        panel.historyIdx = -1;
+        input.value = '';
+      }
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      completeCommand(input);
+    }
+  });
+}
+
 // runInPanel drives a command from the context menu into an already-open
 // agent console tab (Access > Elevate, etc.) as if the operator typed it.
 function runInPanel(id, line) {
@@ -929,7 +976,16 @@ function openScriptConsole() {
     const scroll = pane.querySelector('.term-scroll');
     const form = pane.querySelector('form');
     const input = pane.querySelector('input');
-    form.addEventListener('submit', (e) => { e.preventDefault(); const line = input.value.trim(); if (!line) return; input.value = ''; runTermCommand('', line, scroll); });
+    STATE.panels[key] = { history: loadHistory(key), historyIdx: -1 };
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const line = input.value.trim();
+      if (!line) return;
+      pushHistory(STATE.panels[key], key, line);
+      input.value = '';
+      runTermCommand('', line, scroll);
+    });
+    wireTerminalKeys(input, STATE.panels[key]);
     dockBody.appendChild(pane);
     addTab(key, 'Sliver Console', null, true);
   }
@@ -961,7 +1017,7 @@ function buildAgentPanel(id, rec) {
   root.style.display = '';
   const os = (rec.a.OS || '').toLowerCase();
   const cwd = os.includes('windows') ? 'C:\\' : '/';
-  STATE.panels[id] = { cwd, history: [], historyIdx: -1 };
+  STATE.panels[id] = { cwd, history: loadHistory(id), historyIdx: -1 };
 
   $$('.subtab', root).forEach((t) => t.onclick = () => switchSubtab(root, id, t.dataset.sub));
 
@@ -973,34 +1029,11 @@ function buildAgentPanel(id, rec) {
     e.preventDefault();
     const line = cmdInput.value.trim();
     if (!line) return;
-    STATE.panels[id].history.push(line);
-    STATE.panels[id].historyIdx = -1;
+    pushHistory(STATE.panels[id], id, line);
     cmdInput.value = '';
     runTermCommand(id, line, scroll);
   });
-  cmdInput.addEventListener('keydown', (e) => {
-    const panel = STATE.panels[id];
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (panel.history.length === 0) return;
-      if (panel.historyIdx === -1) panel.historyIdx = panel.history.length - 1;
-      else if (panel.historyIdx > 0) panel.historyIdx--;
-      cmdInput.value = panel.history[panel.historyIdx];
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (panel.historyIdx === -1) return;
-      if (panel.historyIdx < panel.history.length - 1) {
-        panel.historyIdx++;
-        cmdInput.value = panel.history[panel.historyIdx];
-      } else {
-        panel.historyIdx = -1;
-        cmdInput.value = '';
-      }
-    } else if (e.key === 'Tab') {
-      e.preventDefault();
-      completeCommand(cmdInput);
-    }
-  });
+  wireTerminalKeys(cmdInput, STATE.panels[id]);
 
   // ---- files ----
   elIn(root, 'files-up').onclick = () => listDir(id, root, parentPath(STATE.panels[id].cwd));
