@@ -100,6 +100,17 @@ func runSliverConsole(sessionID, command string) (string, error) {
 	if command == "" {
 		return "", fmt.Errorf("empty command")
 	}
+	return runSliverConsoleScript(sessionID, []string{command}, consoleTimeout)
+}
+
+// runSliverConsoleScript runs several commands in *one* sliver-client
+// invocation. Batching matters for bulk work: each invocation pays process
+// startup plus an armory index read, so a hundred separate calls take an order
+// of magnitude longer than one rc script containing a hundred lines.
+func runSliverConsoleScript(sessionID string, commands []string, timeout time.Duration) (string, error) {
+	if len(commands) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
 	home, err := clientHome()
 	if err != nil {
 		return "", err
@@ -111,8 +122,11 @@ func runSliverConsole(sessionID, command string) (string, error) {
 		rc.WriteString(sessionID)
 		rc.WriteString("\n")
 	}
-	rc.WriteString(command)
-	rc.WriteString("\nexit\n")
+	for _, cmd := range commands {
+		rc.WriteString(cmd)
+		rc.WriteString("\n")
+	}
+	rc.WriteString("exit\n")
 
 	rcFile, err := os.CreateTemp(home, "rc-*.txt")
 	if err != nil {
@@ -126,7 +140,7 @@ func runSliverConsole(sessionID, command string) (string, error) {
 	}
 	rcFile.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), consoleTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	c := exec.CommandContext(ctx, "sliver-client", "console", "--rc", rcPath)
@@ -135,7 +149,7 @@ func runSliverConsole(sessionID, command string) (string, error) {
 
 	clean := cleanConsoleOutput(string(out))
 	if ctx.Err() == context.DeadlineExceeded {
-		return clean, fmt.Errorf("command timed out after %s", consoleTimeout)
+		return clean, fmt.Errorf("command timed out after %s", timeout)
 	}
 	// sliver-client exits 0 for a normal command run; a non-zero exit usually
 	// means a connection/config problem, in which case the captured output is
@@ -144,6 +158,101 @@ func runSliverConsole(sessionID, command string) (string, error) {
 		return "", fmt.Errorf("sliver-client: %v", runErr)
 	}
 	return clean, nil
+}
+
+// ---- armory install all ----
+// The native `armory install all` cannot run here: before installing anything it
+// calls forms.Confirm("Install N aliases and M extensions?"), and this console
+// has no TTY to answer it, so the command exits having done nothing. Installing
+// a package *by name* has no such prompt, so we read the index, then issue one
+// `armory install <name> -f` per package in a single rc script. -f is required,
+// not just convenient: without it an already-installed package raises an
+// overwrite prompt that would hang the same way.
+
+// armoryInstallAllTimeout is generous — this downloads every package in the
+// index, which is many megabytes over the network.
+const armoryInstallAllTimeout = 20 * time.Minute
+
+var armoryInstallAllRE = regexp.MustCompile(`(?i)^armory\s+install\s+all\b`)
+
+// armoryPkgRE pulls the command name out of a row of the armory index table,
+// which looks like: " Default   sa-whoami   v0.0.28   Extension   Displays ..."
+// Requiring the vN version and the Extension/Alias type keeps it from matching
+// the header, separator rules, or the [!] warning lines.
+var armoryPkgRE = regexp.MustCompile(`(?m)^\s*\S+\s+(\S+)\s+v\S+\s+(?:Extension|Alias)\s`)
+
+// isArmoryInstallAll reports whether cmd is the bulk install we need to expand.
+func isArmoryInstallAll(cmd string) bool {
+	return armoryInstallAllRE.MatchString(strings.TrimSpace(cmd))
+}
+
+// parseArmoryPackages extracts unique package names from `armory` index output,
+// preserving the order they were listed in.
+func parseArmoryPackages(index string) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range armoryPkgRE.FindAllStringSubmatch(index, -1) {
+		name := m[1]
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
+}
+
+// runArmoryInstallAll expands the bulk install and reports what happened.
+func runArmoryInstallAll() (string, error) {
+	index, err := runSliverConsole("", "armory")
+	if err != nil {
+		return index, fmt.Errorf("could not read the armory index: %w", err)
+	}
+	names := parseArmoryPackages(index)
+	if len(names) == 0 {
+		return index, fmt.Errorf("no packages found in the armory index (is the armory reachable?)")
+	}
+
+	cmds := make([]string, 0, len(names))
+	for _, n := range names {
+		cmds = append(cmds, "armory install "+n+" -f")
+	}
+	out, err := runSliverConsoleScript("", cmds, armoryInstallAllTimeout)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Expanded `armory install all` into %d individual installs.\n"+
+		"(The native command needs an interactive confirmation this console cannot answer.)\n\n", len(names))
+	b.WriteString(out)
+	if err != nil {
+		return b.String(), err
+	}
+	// Count *distinct* packages: shared dependencies (coff-loader backs every
+	// BOF extension) are reinstalled once per dependent, so counting the
+	// "Installing" lines would report more installs than packages requested.
+	installed := len(parseArmoryInstalled(out))
+	fmt.Fprintf(&b, "\n\n--- installed %d distinct packages from %d requested; "+
+		"run `extensions list` / `aliases` to confirm. ---", installed, len(names))
+	return b.String(), nil
+}
+
+// armoryInstalledRE matches the per-package progress line sliver prints, e.g.
+//
+//	[*] Installing extension 'sa-whoami' (v0.0.28) ...
+var armoryInstalledRE = regexp.MustCompile(`Installing (?:extension|alias) '([^']+)'`)
+
+// parseArmoryInstalled returns the distinct package names an install transcript
+// reports having installed.
+func parseArmoryInstalled(out string) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range armoryInstalledRE.FindAllStringSubmatch(out, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		names = append(names, m[1])
+	}
+	return names
 }
 
 // cleanConsoleOutput strips ANSI control codes, spinner carriage-return frames,

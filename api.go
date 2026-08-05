@@ -705,6 +705,17 @@ func hConsole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fmt.Errorf("empty command"), 400)
 		return
 	}
+	// `armory install all` is expanded into per-package installs — the native
+	// command's confirmation prompt has no TTY here (see console.go).
+	if isArmoryInstallAll(in.Cmd) {
+		out, err := runArmoryInstallAll()
+		if err != nil {
+			writeJSON(w, map[string]any{"output": out, "error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"output": out})
+		return
+	}
 	out, err := runSliverConsole(r.PathValue("id"), in.Cmd)
 	if err != nil {
 		writeErr(w, err, 502)
