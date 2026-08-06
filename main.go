@@ -22,7 +22,6 @@ import (
 var webFS embed.FS
 
 var sliver *Sliver
-var ligolo *Ligolo
 
 func main() {
 	defaultCfg := defaultConfigPath()
@@ -30,16 +29,9 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:4443", "listen address for the web UI")
 	password := flag.String("password", "", "HTTP basic-auth password (user: operator). Required to bind non-localhost")
 	dbPath := flag.String("sliver-db", defaultSliverDBPath(), "path to the Sliver server sqlite DB (enables stale-listener detection)")
-	ligoloURL := flag.String("ligolo-url", "", "ligolo-ng proxy API base URL (e.g. http://127.0.0.1:8080) — enables the Ligolo tab")
-	ligoloUser := flag.String("ligolo-user", "ligolo", "ligolo-ng API username")
-	ligoloPass := flag.String("ligolo-pass", "", "ligolo-ng API password")
 	flag.Parse()
 	sliverDB = *dbPath
 	operatorConfigPath = *configPath // reused by the native sliver-client console
-	ligolo = NewLigolo(*ligoloURL, *ligoloUser, *ligoloPass)
-	if ligolo.Configured() {
-		log.Printf("ligolo-ng API configured at %s (user %q)", *ligoloURL, *ligoloUser)
-	}
 
 	if *configPath == "" {
 		log.Fatal("no operator config found; pass -config /path/to/operator.cfg")

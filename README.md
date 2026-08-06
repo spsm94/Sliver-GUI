@@ -6,7 +6,7 @@ top time strip, a left sidebar that groups agents by kind, and a tabbed detail
 pane — restyled in a zinc dark theme with JetBrains Mono. You get a graphical
 operator workflow: a grouped agent list, per-agent interaction (terminal, file
 browser, process list, network, screenshots, info), listener management, implant
-generation, pivoting and tunnelling (pivot listeners, SOCKS5, ligolo-ng), and a
+generation, pivoting and tunnelling (pivot listeners, SOCKS5), and a
 collapsible live event log.
 
 It is a thin **bridge**: a small Go server connects to your Sliver server over the
@@ -64,9 +64,6 @@ most likely to still verify against the current server CA. Open
 | `-addr`   | `127.0.0.1:4443` | listen address for the web UI |
 | `-password` | *(none)* | HTTP basic-auth password (user: `operator`). **Required** to bind a non-localhost address |
 | `-sliver-db` | `<home>/.sliver/sliver.db` | Sliver server sqlite DB, read read-only to detect stale listeners |
-| `-ligolo-url` | *(none)* | ligolo-ng proxy API base URL (e.g. `http://127.0.0.1:8080`). Enables the **Ligolo** tab; without it the tab is inert |
-| `-ligolo-user` | `ligolo` | ligolo-ng API username |
-| `-ligolo-pass` | *(none)* | ligolo-ng API password |
 
 ## Security
 
@@ -81,12 +78,11 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
   the bridge host on every command (see `console.go`). Anyone who reaches the
   UI gets the full native command set, including host-affecting ones
   (`armory install`, `generate`, etc.) — treat the whole console as privileged.
-- **SOCKS5 proxies and Ligolo tunnels are hosted on the bridge host itself**, not
-  in a client. A started proxy is a real listening socket on this machine, and a
-  running Ligolo tunnel adds a TUN interface plus kernel routes into the target's
-  networks. Both outlive the browser session, so anything else that can reach
-  those sockets/routes reaches the target network too — bind SOCKS to loopback
-  unless you mean otherwise, and stop tunnels when you're done.
+- **SOCKS5 proxies are hosted on the bridge host itself**, not in a client. A
+  started proxy is a real listening socket on this machine and it outlives the
+  browser session, so anything else that can reach it reaches the target network
+  too — bind it to loopback unless you mean otherwise, and stop proxies when
+  you're done.
 - Use it only against infrastructure you are authorized to operate.
 
 ## Features
@@ -98,7 +94,6 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
 | **Terminal** | Per-agent console that drives the real `sliver-client` binary (via `console.go`), so it isn't limited to a curated command set — `getsystem`, `make-token`, `procdump`, `hashdump`, `registry`, `execute-shellcode`, `armory`, `profiles`, `loot`, `hosts`, and everything else `sliver-client` supports all work. Sliver commands are the default (`ls`/`ps`/`download`/…, `help` for all); OS **shell** is explicit via `shell <cmd>`, `execute <cmd>`, or `!<cmd>`. Command history persists across page reloads, with tab completion. Each command is a one-shot invocation, so state doesn't persist client-side between commands beyond what Sliver itself tracks (cwd, etc.) — see *Known limitations*. Two commands are intercepted rather than passed through: `socks5` (routed to the bridge-hosted proxy) and `armory install all` (expanded into per-package installs — see *Known limitations*) |
 | **Files / Processes / Network** | Browse directories (download/upload/delete/mkdir), `ps`, `ifconfig`+`netstat`. Works on **beacons** too: the bridge waits for the beacon's next check-in and returns the tasked result (so a slow-sleep beacon is slow to browse, but it works) |
 | **Pivoting** | Per-agent tab to start/stop TCP or named-pipe pivot listeners on a session, plus **SOCKS5**: start/stop a proxy through the session, with an optional username (a random password is generated and shown). The proxy is hosted by the bridge on its own long-lived gRPC connection, so it survives browser reloads and lives as long as the service — unlike a console-started one. Session-only; beacons are rejected. A server-wide **Pivot graph** view shows every pivoting session and its downstream chained implants |
-| **Ligolo** | Drive a [ligolo-ng](https://github.com/nicocha30/ligolo-ng) 0.8+ proxy (daemon mode) from the UI: list connected agents and the interfaces they see, create/destroy TUN interfaces, add/remove routed CIDRs, start/stop per-agent tunnels, and manage agent-side listeners. Unlike SOCKS this needs no proxychains — routed subnets are reachable by unmodified tools. Requires `-ligolo-url`; the bridge proxies every call so the JWT stays server-side and ligolo's CORS allowlist is a non-issue |
 | **Sliver console** | A sliver-client-style command console backed by the operator gRPC connection: server commands (`sessions`/`beacons`/`jobs`), `use <id>` (or the agent dropdown) to interact, then per-agent commands (`info`/`pwd`/`cd`/`ls`/`ps`/`netstat`/`ifconfig`/`screenshot`/`execute`/`kill`) |
 | **Screenshot** | Capture the agent's desktop (GUI hosts only) |
 | **Info** | Agent metadata (id, user, host, os/arch, transport, pid, version); live **beacon cadence** editor to reconfigure sleep/jitter on a running beacon; kill button |
@@ -148,10 +143,10 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
   profiles (Generate always uses the `default` HTTP C2 config). Loot,
   credentials, the hosts database, and registry/service/token operations are
   reachable via the native Terminal console but have no dedicated panel.
-- **Ligolo is driven, not supervised.** The bridge talks to a ligolo-ng proxy
-  you start and manage yourself; it does not launch, monitor, or restart the
-  daemon. If the proxy restarts it re-signs its JWTs with a fresh secret, which
-  the client handles by re-authenticating on a 401.
+- **Tunnelling is SOCKS5 only.** A ligolo-ng integration was tried and removed
+  (it didn't work in practice); route through the bridge-hosted SOCKS5 proxy in
+  the Pivoting tab instead. Running ligolo-ng alongside this by hand still works
+  fine — the bridge just doesn't drive it.
 
 ## Layout
 
@@ -163,8 +158,6 @@ sliver.go         gRPC client wrapper (connect, sessions, files, exec, generate,
 console.go        drives the real sliver-client binary for native per-agent
                   and server-scope commands (one-shot --rc invocations), plus
                   the `armory install all` expansion
-ligolo.go         REST client for a ligolo-ng proxy's API (auth/JWT, agents,
-                  interfaces, routes, listeners, tunnels)
 listeners_db.go   stale-listener detection by reading the Sliver sqlite DB directly
 tools.go          small host-side helpers: saving a generated implant to disk,
                   running local commands (e.g. sqlite3)

@@ -30,7 +30,6 @@
         <button data-act="open-tab" data-tab="console">Sliver Console</button>
         <hr>
         <button data-act="open-tab" data-tab="pivotgraph">Proxy Pivots</button>
-        <button data-act="open-tab" data-tab="ligolo">Ligolo Tunnels</button>
       </div>
     </div>
 
@@ -330,97 +329,6 @@
           <thead><tr><th>Job</th><th>URL</th><th>Profile</th><th></th></tr></thead>
           <tbody data-el="sl-body"></tbody>
         </table>
-      </div>
-    </div>
-  </div>
-</template>
-
-<template id="util-ligolo-tpl">
-  <div class="utilpane">
-    <p class="page-sub">Ligolo-ng tunnels a target's networks to a TUN interface on this host, so tools run
-      unmodified &mdash; no SOCKS, no proxychains. Deploy an agent on the target (it connects back to the
-      ligolo proxy), create an interface, route the target's subnets through it, then start the tunnel.</p>
-
-    <div class="section">
-      <div class="card" data-el="lg-status" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span data-el="lg-status-text" class="mono">checking ligolo proxy&hellip;</span>
-        <button class="btn ghost sm" data-el="lg-refresh">refresh</button>
-      </div>
-    </div>
-
-    <div data-el="lg-body" style="display:none">
-      <div class="section">
-        <h2>Agents</h2>
-        <p class="page-sub">Agents connected to the ligolo proxy. Start a tunnel to bind one to an interface.</p>
-        <div class="tbl-wrap">
-          <table class="tbl">
-            <thead><tr><th>ID</th><th>Name</th><th>Agent networks</th><th>Interface</th><th>Tunnel</th><th></th></tr></thead>
-            <tbody data-el="lg-agents-body"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="section">
-        <h2>TUN interfaces</h2>
-        <div class="card">
-          <div class="hostport" style="align-items:center;flex-wrap:wrap;gap:8px">
-            <input data-el="lg-iface-name" class="mono" style="flex:1;min-width:160px" placeholder="ligolo">
-            <button class="btn emerald sm" data-el="lg-iface-add">create interface</button>
-            <span data-el="lg-iface-msg" class="mono" style="font-size:12px"></span>
-          </div>
-        </div>
-        <div class="tbl-wrap" style="margin-top:10px">
-          <table class="tbl">
-            <thead><tr><th>Interface</th><th>Routes</th><th></th></tr></thead>
-            <tbody data-el="lg-ifaces-body"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="section">
-        <h2>Add route</h2>
-        <div class="card">
-          <div class="grid2">
-            <label class="field"><span class="lbl">Interface</span>
-              <select data-el="lg-route-iface" class="mono"></select>
-            </label>
-            <label class="field"><span class="lbl">Subnets (CIDR, comma or space separated)</span>
-              <input data-el="lg-route-cidr" class="mono" placeholder="10.10.0.0/16, 192.168.50.0/24">
-            </label>
-          </div>
-          <button class="btn emerald sm" data-el="lg-route-add" style="margin-top:8px">add route</button>
-          <span data-el="lg-route-msg" style="margin-left:12px"></span>
-        </div>
-      </div>
-
-      <div class="section">
-        <h2>Agent listeners</h2>
-        <p class="page-sub">Bind a socket on the agent and relay it back here &mdash; the reverse direction
-          (useful for catching callbacks on a host you can't reach directly).</p>
-        <div class="card">
-          <div class="grid2">
-            <label class="field"><span class="lbl">Agent</span>
-              <select data-el="lg-lsn-agent" class="mono"></select>
-            </label>
-            <label class="field"><span class="lbl">Network</span>
-              <select data-el="lg-lsn-network"><option value="tcp">tcp</option><option value="udp">udp</option></select>
-            </label>
-            <label class="field"><span class="lbl">Listen on agent</span>
-              <input data-el="lg-lsn-listen" class="mono" placeholder="0.0.0.0:4444">
-            </label>
-            <label class="field"><span class="lbl">Redirect to (from proxy host)</span>
-              <input data-el="lg-lsn-redirect" class="mono" placeholder="127.0.0.1:4444">
-            </label>
-          </div>
-          <button class="btn emerald sm" data-el="lg-lsn-add" style="margin-top:8px">add listener</button>
-          <span data-el="lg-lsn-msg" style="margin-left:12px"></span>
-        </div>
-        <div class="tbl-wrap" style="margin-top:10px">
-          <table class="tbl">
-            <thead><tr><th>ID</th><th>Agent</th><th>Net</th><th>Listening</th><th>Redirect</th><th>Online</th><th></th></tr></thead>
-            <tbody data-el="lg-lsn-body"></tbody>
-          </table>
-        </div>
       </div>
     </div>
   </div>
