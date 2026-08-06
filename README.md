@@ -42,6 +42,31 @@ vanilla HTML/CSS/JS embedded with `//go:embed`, so editing it and re-running
 | **`sqlite3` CLI** | Stale-listener detection (`listeners_db.go`) shells out to it rather than linking a driver, which is what keeps the build CGO-free. |
 | **Linux, running as root** | See below. |
 
+**Install Sliver with the official one-liner** — everything here assumes that
+layout (the apt package and source builds are not the supported path):
+
+```
+curl https://sliver.sh/install | sudo bash
+```
+
+That gives you exactly what this bridge expects, with nothing to adjust:
+
+| it installs | we rely on it for |
+|---|---|
+| `/usr/local/bin/sliver-client` (with `sliver` as a symlink to it) | the native **Terminal** console |
+| `/root/sliver-server` | the unit's `ExecStartPre`, which re-mints the operator config |
+| `/etc/systemd/system/sliver.service` | our unit's `After=`/`BindsTo=`/`WantedBy=` |
+| operator configs in `~/.sliver-client/configs/` | what `-config` defaults to picking |
+
+Note the server service is **not enabled at boot** by default — that's upstream's
+choice, so after a reboot you need `systemctl start sliver`.
+
+If you instead run `sliver-server daemon` by hand with no `sliver.service`, the
+bridge itself is unaffected, but `deploy/sliver-web-gui.service` will not start:
+`BindsTo=` a unit that doesn't exist is a hard failure. Drop the `After=`,
+`BindsTo=` and `WantedBy=sliver.service` lines and use
+`WantedBy=multi-user.target` instead.
+
 **This is a co-located sidecar, not a remote client.** It must run on the same
 host as `sliver-server`, because it:
 
@@ -89,11 +114,11 @@ sudo ./deploy/install.sh
 
 That builds, installs to `/usr/local/bin`, registers
 `deploy/sliver-web-gui.service`, and drops a config at
-`/etc/default/sliver-web-gui` (mode 0600, never overwritten on reinstall).
-**Check the paths in the unit first** — it expects `sliver-server` at
-`/root/sliver-server` and the operator listener on `127.0.0.1:31337`. The unit
-re-mints the operator config on every start, which permanently avoids the
-CA-mismatch problem described below.
+`/etc/default/sliver-web-gui` (mode 0600, never overwritten on reinstall). On a
+standard Sliver install there is nothing to edit. The unit re-mints the operator
+config on every start, which permanently avoids the CA-mismatch problem
+described below, and is bound to `sliver.service` so it comes up and goes down
+with the Sliver daemon.
 
 Set the port for the service in `/etc/default/sliver-web-gui` rather than
 editing the unit:

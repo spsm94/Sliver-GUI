@@ -15,7 +15,9 @@ RestartSec=3
 # current CA — this eliminates expired-cert / "signed by unknown authority"
 # errors. `operator` refuses to overwrite, so delete the old config first.
 #
-# ADJUST FOR YOUR HOST: the sliver-server path below, and -lhost/-lport if your
+# The paths below match what the official installer lays down
+# (curl https://sliver.sh/install | sudo bash), so they need no editing on a
+# standard install. Adjust only if you put sliver-server somewhere else or your
 # operator listener is not on 127.0.0.1:31337.
 ExecStartPre=-/bin/rm -f /root/.sliver/webgui.cfg
 ExecStartPre=/root/sliver-server operator --name webgui --lhost 127.0.0.1 --lport 31337 --permissions all --save /root/.sliver/webgui.cfg
