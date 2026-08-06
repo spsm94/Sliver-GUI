@@ -802,9 +802,47 @@ function addTab(id, label, dotColor, closable) {
   if (closable) {
     tab.addEventListener('dblclick', (e) => { e.stopPropagation(); renameTab(id, tab, label); });
   }
+  makeTabDraggable(tab);
   dockTabs.appendChild(tab);
   return tab;
 }
+
+// ----- tab reordering -----
+// Drag a dock tab left/right to reorder. The tab is moved live during dragover
+// rather than on drop, so the strip previews the new order as you go. Order is
+// DOM order only and is not persisted — tabs are session-scoped (agent panels
+// come and go, utility panels open on demand), the same as custom tab names.
+let DRAG_TAB = null;
+function makeTabDraggable(tab) {
+  tab.draggable = true;
+  tab.addEventListener('dragstart', (e) => {
+    DRAG_TAB = tab;
+    tab.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox refuses to start a drag unless some data is set.
+    e.dataTransfer.setData('text/plain', tab.dataset.tab);
+  });
+  tab.addEventListener('dragend', () => { tab.classList.remove('dragging'); DRAG_TAB = null; });
+}
+// tabBefore returns the first tab whose midpoint is right of x — i.e. the one
+// the dragged tab should be inserted before. Null means "past the last tab".
+function tabBefore(x) {
+  return $$('.dtab', dockTabs).find((t) => {
+    if (t === DRAG_TAB) return false;
+    const r = t.getBoundingClientRect();
+    return x < r.left + r.width / 2;
+  }) || null;
+}
+dockTabs.addEventListener('dragover', (e) => {
+  if (!DRAG_TAB) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const before = tabBefore(e.clientX);
+  if (before === DRAG_TAB) return;
+  if (before) dockTabs.insertBefore(DRAG_TAB, before);
+  else dockTabs.appendChild(DRAG_TAB);
+});
+dockTabs.addEventListener('drop', (e) => e.preventDefault());
 function activateTab(id) {
   $$('.dtab', dockTabs).forEach((t) => t.classList.toggle('active', t.dataset.tab === id));
   $$('.dpane', dockBody).forEach((p) => p.classList.toggle('active', p.dataset.tab === id));
