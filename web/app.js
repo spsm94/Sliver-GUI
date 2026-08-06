@@ -920,6 +920,10 @@ async function runTermCommand(id, line, scroll) {
     pushConsoleRow(scroll, {
       cmd: line,
       out: 'Native Sliver console — type any sliver-client command.\n\n' +
+        'Scope matters: this tab runs at ' + (id ? 'agent' : 'server') + ' scope. ' +
+        'Server commands (sessions, jobs, generate, armory…) work anywhere;\n' +
+        'per-agent commands and armory aliases (ls, ps, getsystem, rubeus…)\n' +
+        'only exist in an agent Terminal tab.\n\n' +
         'Common: sessions, beacons, use <id>, info, jobs, generate, ls, cd, ps,\n' +
         'download, upload, execute, execute-assembly, screenshot, kill, getsystem,\n' +
         'make-token, impersonate, procdump, hashdump, registry, execute-shellcode,\n' +
@@ -936,7 +940,18 @@ async function runTermCommand(id, line, scroll) {
     const endpoint = id ? `/api/target/${id}/console` : '/api/console';
     const r = await api('POST', endpoint, { cmd: line });
     row.remove();
-    pushConsoleRow(scroll, { cmd: line, out: r.output || '(no output)' });
+    let out = r.output || '(no output)';
+    // Armory aliases and per-agent commands live in sliver-client's *agent*
+    // menu, which it only enters via `use <id>`. The server-scope console never
+    // issues that, so `help rubeus` there reports an unknown topic and prints
+    // the server command list, with nothing to say why. Add the missing why.
+    if (!id && /Unknown help topic/i.test(out)) {
+      out += '\n\n[bridge] This is the server-scope console, so only server ' +
+        'commands are in scope here. Armory aliases and per-agent commands ' +
+        '(rubeus, seatbelt, ls, ps, getsystem, …) exist only once an agent is ' +
+        "selected — run this from that agent's Terminal tab instead.";
+    }
+    pushConsoleRow(scroll, { cmd: line, out });
   } catch (err) {
     row.remove();
     pushConsoleRow(scroll, { cmd: line, err: err.message });
