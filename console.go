@@ -262,6 +262,15 @@ func cleanConsoleOutput(s string) string {
 	lines := strings.Split(s, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, ln := range lines {
+		// Normalise CRLF *before* the spinner pass. Output produced on the target
+		// rather than by the client — .NET assemblies run by armory aliases
+		// (rubeus, seatbelt, sharpup...), BOFs, and `shell`/`execute` on Windows —
+		// comes back with Windows line endings, so splitting on "\n" leaves a
+		// trailing "\r" on every line. The spinner rule below would then treat
+		// that as a frame separator and keep only what follows it: nothing. That
+		// erased the entire body of every Windows tool's output, leaving just the
+		// client's own "[*] <alias> output:" header.
+		ln = strings.TrimSuffix(ln, "\r")
 		// A spinner overwrites its line with \r frames; keep only the final one.
 		if i := strings.LastIndex(ln, "\r"); i >= 0 {
 			ln = ln[i+1:]
