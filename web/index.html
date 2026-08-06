@@ -429,7 +429,7 @@
 <template id="util-profiles-tpl">
   <div class="utilpane">
     <p class="page-sub">Save a reusable implant configuration on the server. Reference a saved profile from
-      Payloads &rsaquo; Generate Stager to build and serve its full binary to a stager on connect.</p>
+      Listeners &rsaquo; Stage Listeners to serve its full binary to a first-stage payload on connect.</p>
     <form class="limit" data-el="prof-form">
       <div class="section">
         <h2>Profile</h2>
@@ -778,7 +778,9 @@
       <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
       <div class="grid2">
         <label class="field" style="margin:0"><span class="lbl">Output</span>
-          <select id="mgFormat"><option value="exe">Windows EXE</option><option value="service">Windows Service EXE</option><option value="shared">Windows DLL</option><option value="shellcode">Shellcode</option></select>
+          <!-- Options are rebuilt per-OS by updateGenTargetFields(); these are the
+               windows defaults, matching the default OS selection below. -->
+          <select id="mgFormat"><option value="exe">Windows EXE (.exe)</option><option value="service">Windows Service EXE</option><option value="shared">Windows DLL (.dll)</option><option value="shellcode">Shellcode (.bin)</option></select>
         </label>
         <label class="field" style="margin:0"><span class="lbl">Architecture</span><select id="mgArch"><option value="amd64">x64</option><option value="386">x86</option><option value="arm64">arm64</option></select></label>
         <label class="field" style="margin:0"><span class="lbl">OS</span><select id="mgOs"><option>windows</option><option>linux</option><option>darwin</option></select></label>

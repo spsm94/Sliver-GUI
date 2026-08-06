@@ -801,6 +801,7 @@ func buildImplantConfig(opts GenerateOptions) *clientpb.ImplantConfig {
 		MaxConnectionErrors: uint32(maxErrors),
 		PollTimeout:         int64(time.Second) * poll,
 		Format:              outputFormat(opts.Format),
+		Exports:             defaultExports,
 		TemplateName:        "sliver",  // server looks up the build template by name
 		HTTPC2ConfigName:    "default", // default HTTP C2 profile
 		ConnectionStrategy:  "s",       // sequential C2 attempts
@@ -946,6 +947,14 @@ func (s *Sliver) Builds() ([]ImplantBuildInfo, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
+
+// defaultExports mirrors the sliver-client `--exports` flag default. It is
+// inert for exe/DLL builds, but linux and darwin shellcode *require* a
+// non-empty list — the server takes Exports[0] as the entry symbol and
+// otherwise fails with "shellcode requires at least one export symbol". The
+// bridge previously left this unset, which is why non-Windows shellcode could
+// never be built here.
+var defaultExports = []string{"StartW", "VoidFunc", "DllInstall", "DllRegisterServer", "DllUnregisterServer"}
 
 func outputFormat(f string) clientpb.OutputFormat {
 	switch f {

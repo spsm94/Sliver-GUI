@@ -863,7 +863,8 @@ async function runTermCommand(id, line, scroll) {
   if (!line) return;
   const entry = { cmd: line, pending: true };
   const row = pushConsoleRow(scroll, entry);
-  const cmd = line.split(/\s+/)[0].toLowerCase();
+  const words = line.split(/\s+/);
+  const cmd = words[0].toLowerCase();
   if (cmd === 'clear') { scroll.innerHTML = ''; row.remove(); return; }
   // socks5 is intercepted instead of being sent to the native console. The
   // console runs a one-shot sliver-client that exits after each command, and a
@@ -872,7 +873,11 @@ async function runTermCommand(id, line, scroll) {
   // Route it to the typed API that hosts the proxy on the bridge, so the
   // familiar command works and the proxy persists.
   if (cmd === 'socks5' || cmd === 'socks') { row.remove(); await runSocksCommand(id, line, scroll); return; }
-  if (cmd === 'help' || cmd === '?') {
+  // Only a *bare* help/? gets this bridge-specific blurb. `help <command>` is a
+  // real sliver-client command, and swallowing it here made the blurb's own
+  // closing advice impossible to follow — it told you to type "help <command>"
+  // and then answered with the same blurb again.
+  if ((cmd === 'help' || cmd === '?') && words.length === 1) {
     row.remove();
     pushConsoleRow(scroll, {
       cmd: line,
@@ -2125,6 +2130,67 @@ function updateGenListenerFields() {
   $('#mgC2HostPortRow').style.display = isPipe ? 'none' : '';
   $('#mgPipeField').style.display = isPipe ? '' : 'none';
 }
+
+// Sliver's output formats are not uniform across targets, so the Output and
+// Architecture lists are rebuilt whenever the OS changes rather than being a
+// fixed windows-flavoured list:
+//   - `service` is a Windows *service* binary (IsService); the server builds it
+//     with the plain executable path, so on linux/darwin it would silently
+//     produce an ordinary binary mislabelled as a service.
+//   - shellcode is implemented per-OS with narrower arch support than the OS
+//     itself has (server/generate/binaries.go: SliverShellcode) — windows
+//     amd64/386, linux amd64/arm64, darwin arm64 — so it is filtered by arch
+//     as well as by OS.
+const GEN_FORMATS = {
+  windows: [
+    ['exe', 'Windows EXE (.exe)'],
+    ['service', 'Windows Service EXE'],
+    ['shared', 'Windows DLL (.dll)'],
+    ['shellcode', 'Shellcode (.bin)'],
+  ],
+  linux: [
+    ['exe', 'Linux executable (ELF)'],
+    ['shared', 'Linux shared library (.so)'],
+    ['shellcode', 'Shellcode (.bin)'],
+  ],
+  darwin: [
+    ['exe', 'macOS executable (Mach-O)'],
+    ['shared', 'macOS dynamic library (.dylib)'],
+    ['shellcode', 'Shellcode (.bin)'],
+  ],
+};
+// Architectures Go can target per OS — darwin/386 no longer exists.
+const GEN_ARCHES = {
+  windows: [['amd64', 'x64'], ['386', 'x86'], ['arm64', 'arm64']],
+  linux: [['amd64', 'x64'], ['386', 'x86'], ['arm64', 'arm64']],
+  darwin: [['amd64', 'x64'], ['arm64', 'arm64']],
+};
+// Arches each OS's shellcode backend actually implements.
+const SHELLCODE_ARCHES = { windows: ['amd64', '386'], linux: ['amd64', 'arm64'], darwin: ['arm64'] };
+
+// setSelectOptions replaces a select's options, keeping the current selection
+// when it is still offered (so switching OS doesn't silently reset a choice
+// that remains valid).
+function setSelectOptions(sel, pairs) {
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const [value, label] of pairs) sel.appendChild(new Option(label, value));
+  if (pairs.some(([v]) => v === prev)) sel.value = prev;
+}
+
+function updateGenTargetFields() {
+  const os = $('#mgOs').value;
+  setSelectOptions($('#mgArch'), GEN_ARCHES[os] || GEN_ARCHES.linux);
+  let formats = GEN_FORMATS[os] || GEN_FORMATS.linux;
+  const scArches = SHELLCODE_ARCHES[os];
+  if (scArches && !scArches.includes($('#mgArch').value)) {
+    formats = formats.filter(([v]) => v !== 'shellcode');
+  }
+  setSelectOptions($('#mgFormat'), formats);
+}
+$('#mgOs').addEventListener('change', updateGenTargetFields);
+$('#mgArch').addEventListener('change', updateGenTargetFields);
+updateGenTargetFields();
 async function refreshGenListenerList() {
   const sel = $('#mgListener');
   const prev = sel.value;
@@ -2212,7 +2278,6 @@ $('#mgSave').onclick = async () => {
   finally { $('#mgSave').disabled = false; }
 };
 
-// ----- Generate Stager -----
 // =====================================================================
 // directory browser (bridge host filesystem — Generate's save dir)
 // =====================================================================
