@@ -1,0 +1,11 @@
+# Build artifact. Rebuilt by `go build -o sliver-web-gui .` and installed to
+# /usr/local/bin — it must never be committed. Tracking it previously rewrote a
+# ~28MB blob on every build and inflated .git to ~340MB against ~500KB of source.
+sliver-web-gui
+
+# Operator configs, keys and certs must never enter the repo.
+*.cfg
+*.pem
+*.key
+*.crt
+*.p12
