@@ -1,0 +1,36 @@
+[Unit]
+Description=Sliver Web GUI (browser operator console)
+# Start after the Sliver daemon and stop whenever it stops. BindsTo means this
+# unit is brought down if sliver.service goes away; After orders startup so the
+# operator gRPC listener is up before the GUI connects.
+After=sliver.service
+BindsTo=sliver.service
+
+[Service]
+Type=simple
+User=root
+Restart=on-failure
+RestartSec=3
+# Mint a fresh operator config every start so it always matches the server's
+# current CA — this eliminates expired-cert / "signed by unknown authority"
+# errors. `operator` refuses to overwrite, so delete the old config first.
+#
+# ADJUST FOR YOUR HOST: the sliver-server path below, and -lhost/-lport if your
+# operator listener is not on 127.0.0.1:31337.
+ExecStartPre=-/bin/rm -f /root/.sliver/webgui.cfg
+ExecStartPre=/root/sliver-server operator --name webgui --lhost 127.0.0.1 --lport 31337 --permissions all --save /root/.sliver/webgui.cfg
+
+# Listen address and any extra flags come from /etc/default/sliver-web-gui, so
+# the port can be changed without editing this unit. The Environment= lines are
+# the fallback when that file is absent (EnvironmentFile=- tolerates it missing).
+# ${WEBGUI_ADDR} is a single token; $WEBGUI_OPTS is deliberately unbraced so
+# systemd word-splits it into separate arguments.
+Environment=WEBGUI_ADDR=127.0.0.1:4443
+Environment=WEBGUI_OPTS=
+EnvironmentFile=-/etc/default/sliver-web-gui
+ExecStart=/usr/local/bin/sliver-web-gui -config /root/.sliver/webgui.cfg -addr ${WEBGUI_ADDR} $WEBGUI_OPTS
+
+[Install]
+# Pulled up automatically whenever sliver.service starts. Enable with:
+#   systemctl enable sliver-web-gui.service
+WantedBy=sliver.service

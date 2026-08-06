@@ -18,6 +18,93 @@ can't speak Sliver's mTLS gRPC directly — this bridge is what makes a web UI p
 browser ──HTTP/SSE──> sliver-web-gui ──gRPC/mTLS──> sliver-server
 ```
 
+## Requirements
+
+**Build:**
+
+| | |
+|---|---|
+| **Go 1.26.2+** | Hard floor — declared in `go.mod`. |
+| network access | To fetch modules (`go.sum` is committed, so builds are verifiable). |
+
+No CGO. **No `npm`/`node` and no frontend build step** — `web/` is hand-written
+vanilla HTML/CSS/JS embedded with `//go:embed`, so editing it and re-running
+`go build` is the whole workflow. Only two direct module dependencies:
+`github.com/bishopfox/sliver` and `google.golang.org/grpc`.
+
+**Runtime:**
+
+| | |
+|---|---|
+| **Sliver server v1.7.3+** | With the operator/multiplayer gRPC listener up. `go.mod` pins a post-v1.7.3 upstream commit, so the protobufs must be compatible — an older server will not work. |
+| **an operator `.cfg`** | Minted against that server, with sufficient permissions. |
+| **`sliver-client` on `PATH`** | Drives the whole **Terminal** tab (`console.go`). Without it the typed REST features still work, but every native console command fails. |
+| **`sqlite3` CLI** | Stale-listener detection (`listeners_db.go`) shells out to it rather than linking a driver, which is what keeps the build CGO-free. |
+| **Linux, running as root** | See below. |
+
+**This is a co-located sidecar, not a remote client.** It must run on the same
+host as `sliver-server`, because it:
+
+- reads the server's SQLite database directly (`-sliver-db`) to find stale listeners;
+- deletes per-implant build trees under `<sliver-root>/slivers/` when you rebuild
+  a name or delete an implant;
+- writes generated implants to a local directory of your choosing.
+
+The systemd unit additionally runs `sliver-server operator` on every start, so
+the **server binary** must be present locally too.
+
+## Quick start
+
+```
+git clone <url> && cd sliver-web-gui
+go build -o sliver-web-gui .
+
+# mint an operator config against your server
+sliver-server operator --name webgui --lhost 127.0.0.1 --lport 31337 \
+    --permissions all --save ~/.sliver/webgui.cfg
+
+./sliver-web-gui -config ~/.sliver/webgui.cfg
+```
+
+Then open <http://127.0.0.1:4443>.
+
+### Changing the port
+
+The default is `127.0.0.1:4443`. Use `-addr` to pick another:
+
+```
+./sliver-web-gui -config ~/.sliver/webgui.cfg -addr 127.0.0.1:8443
+```
+
+Binding anything other than localhost **requires `-password`** — the server
+refuses to start otherwise. See [Security](#security).
+
+### Running it as a service
+
+To install it as a service that starts and stops with the Sliver daemon:
+
+```
+sudo ./deploy/install.sh
+```
+
+That builds, installs to `/usr/local/bin`, registers
+`deploy/sliver-web-gui.service`, and drops a config at
+`/etc/default/sliver-web-gui` (mode 0600, never overwritten on reinstall).
+**Check the paths in the unit first** — it expects `sliver-server` at
+`/root/sliver-server` and the operator listener on `127.0.0.1:31337`. The unit
+re-mints the operator config on every start, which permanently avoids the
+CA-mismatch problem described below.
+
+Set the port for the service in `/etc/default/sliver-web-gui` rather than
+editing the unit:
+
+```
+WEBGUI_ADDR=127.0.0.1:8443
+#WEBGUI_OPTS=-password changeme
+```
+
+then `systemctl restart sliver-web-gui`.
+
 ## Build
 
 ```
@@ -162,4 +249,7 @@ listeners_db.go   stale-listener detection by reading the Sliver sqlite DB direc
 tools.go          small host-side helpers: saving a generated implant to disk,
                   running local commands (e.g. sqlite3)
 web/              embedded single-page frontend (index.html, app.js, style.css)
+                  — no build step, edit and rebuild
+deploy/           systemd unit, install.sh, and the env file that sets the
+                  listen address (sliver-web-gui.env.example)
 ```

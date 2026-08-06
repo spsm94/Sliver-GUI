@@ -3,6 +3,11 @@
 # ~28MB blob on every build and inflated .git to ~340MB against ~500KB of source.
 sliver-web-gui
 
+# Pre-redesign frontend snapshot. Kept locally as a reference but not shipped —
+# it is dot-prefixed, so //go:embed skips it and it was only ever dead weight in
+# a clone. Still recoverable from git history.
+web/.bak-pre-cs-redesign/
+
 # Operator configs, keys and certs must never enter the repo.
 *.cfg
 *.pem
