@@ -6,7 +6,8 @@ top time strip, a left sidebar that groups agents by kind, and a tabbed detail
 pane — restyled in a zinc dark theme with JetBrains Mono. You get a graphical
 operator workflow: a grouped agent list, per-agent interaction (terminal, file
 browser, process list, network, screenshots, info), listener management, implant
-generation, and a collapsible live event log.
+generation, pivoting and tunnelling (pivot listeners, SOCKS5, ligolo-ng), and a
+collapsible live event log.
 
 It is a thin **bridge**: a small Go server connects to your Sliver server over the
 normal operator gRPC channel (mutual TLS + token) and re-exposes a curated subset
@@ -62,6 +63,10 @@ most likely to still verify against the current server CA. Open
 | `-config` | first cfg found | operator config (.cfg) used to auth to Sliver |
 | `-addr`   | `127.0.0.1:4443` | listen address for the web UI |
 | `-password` | *(none)* | HTTP basic-auth password (user: `operator`). **Required** to bind a non-localhost address |
+| `-sliver-db` | `<home>/.sliver/sliver.db` | Sliver server sqlite DB, read read-only to detect stale listeners |
+| `-ligolo-url` | *(none)* | ligolo-ng proxy API base URL (e.g. `http://127.0.0.1:8080`). Enables the **Ligolo** tab; without it the tab is inert |
+| `-ligolo-user` | `ligolo` | ligolo-ng API username |
+| `-ligolo-pass` | *(none)* | ligolo-ng API password |
 
 ## Security
 
@@ -76,6 +81,12 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
   the bridge host on every command (see `console.go`). Anyone who reaches the
   UI gets the full native command set, including host-affecting ones
   (`armory install`, `generate`, etc.) — treat the whole console as privileged.
+- **SOCKS5 proxies and Ligolo tunnels are hosted on the bridge host itself**, not
+  in a client. A started proxy is a real listening socket on this machine, and a
+  running Ligolo tunnel adds a TUN interface plus kernel routes into the target's
+  networks. Both outlive the browser session, so anything else that can reach
+  those sockets/routes reaches the target network too — bind SOCKS to loopback
+  unless you mean otherwise, and stop tunnels when you're done.
 - Use it only against infrastructure you are authorized to operate.
 
 ## Features
@@ -84,16 +95,18 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
 |------|-----------------|
 | **Sidebar** | Agents grouped into sessions (green), beacons (blue) and dead (grey), collapsible with counts, filterable, auto-refreshed every 5s; click to select |
 | **Dashboard** | Landing view with session/beacon/dead stat tiles |
-| **Terminal** | Per-agent console that drives the real `sliver-client` binary (via `console.go`), so it isn't limited to a curated command set — `getsystem`, `make-token`, `procdump`, `hashdump`, `registry`, `execute-shellcode`, `armory`, `profiles`, `loot`, `hosts`, and everything else `sliver-client` supports all work. Sliver commands are the default (`ls`/`ps`/`download`/…, `help` for all); OS **shell** is explicit via `shell <cmd>`, `execute <cmd>`, or `!<cmd>`. Each command is a one-shot invocation, so state doesn't persist client-side between commands beyond what Sliver itself tracks (cwd, etc.) — see *Known limitations* |
+| **Terminal** | Per-agent console that drives the real `sliver-client` binary (via `console.go`), so it isn't limited to a curated command set — `getsystem`, `make-token`, `procdump`, `hashdump`, `registry`, `execute-shellcode`, `armory`, `profiles`, `loot`, `hosts`, and everything else `sliver-client` supports all work. Sliver commands are the default (`ls`/`ps`/`download`/…, `help` for all); OS **shell** is explicit via `shell <cmd>`, `execute <cmd>`, or `!<cmd>`. Command history persists across page reloads, with tab completion. Each command is a one-shot invocation, so state doesn't persist client-side between commands beyond what Sliver itself tracks (cwd, etc.) — see *Known limitations*. Two commands are intercepted rather than passed through: `socks5` (routed to the bridge-hosted proxy) and `armory install all` (expanded into per-package installs — see *Known limitations*) |
 | **Files / Processes / Network** | Browse directories (download/upload/delete/mkdir), `ps`, `ifconfig`+`netstat`. Works on **beacons** too: the bridge waits for the beacon's next check-in and returns the tasked result (so a slow-sleep beacon is slow to browse, but it works) |
-| **Pivots** | Per-agent tab to start/stop TCP or named-pipe pivot listeners on a session, and a server-wide **Pivot graph** view showing every pivoting session and its downstream chained implants |
+| **Pivoting** | Per-agent tab to start/stop TCP or named-pipe pivot listeners on a session, plus **SOCKS5**: start/stop a proxy through the session, with an optional username (a random password is generated and shown). The proxy is hosted by the bridge on its own long-lived gRPC connection, so it survives browser reloads and lives as long as the service — unlike a console-started one. Session-only; beacons are rejected. A server-wide **Pivot graph** view shows every pivoting session and its downstream chained implants |
+| **Ligolo** | Drive a [ligolo-ng](https://github.com/nicocha30/ligolo-ng) 0.8+ proxy (daemon mode) from the UI: list connected agents and the interfaces they see, create/destroy TUN interfaces, add/remove routed CIDRs, start/stop per-agent tunnels, and manage agent-side listeners. Unlike SOCKS this needs no proxychains — routed subnets are reachable by unmodified tools. Requires `-ligolo-url`; the bridge proxies every call so the JWT stays server-side and ligolo's CORS allowlist is a non-issue |
 | **Sliver console** | A sliver-client-style command console backed by the operator gRPC connection: server commands (`sessions`/`beacons`/`jobs`), `use <id>` (or the agent dropdown) to interact, then per-agent commands (`info`/`pwd`/`cd`/`ls`/`ps`/`netstat`/`ifconfig`/`screenshot`/`execute`/`kill`) |
 | **Screenshot** | Capture the agent's desktop (GUI hosts only) |
 | **Info** | Agent metadata (id, user, host, os/arch, transport, pid, version); live **beacon cadence** editor to reconfigure sleep/jitter on a running beacon; kill button |
-| **Listeners** | Start/stop mTLS, HTTP, HTTPS listeners; bind-host **interface→IP dropdown** (incl. `0.0.0.0` all-interfaces); live job table with stale-listener detection/cleanup. **Generate stager**: build a saved profile's full implant binary and serve it over a raw-TCP job to a stager on connect, with optional AES/RC4 encryption and compression |
+| **Listeners** | Start/stop mTLS, HTTP, HTTPS listeners; bind-host **interface→IP dropdown** (incl. `0.0.0.0` all-interfaces, with a warning when you pick a VPN/tunnel IP) and a refresh button; live job table with stale-listener detection/cleanup |
+| **Stage listeners** | Host a saved profile's full implant binary on a staging listener for a stager to pull, with optional length prefix |
 | **Generate** | Build session/beacon implants (exe / shared lib / shellcode / service) for windows/linux/darwin; single **C2 endpoint** section — a Type dropdown (mTLS/HTTP/HTTPS/**Named Pipe**) with host+port (or a pipe path for named-pipe, to chain through an existing pivot); **sleep/jitter** for beacons; artifact is written to a directory on the bridge host |
-| **Profiles** | Save a reusable implant configuration server-side (same target/C2/cadence fields as Generate) so it can be referenced later — e.g. by the Listeners tab's stager generator — without re-entering the config each time; list/delete saved profiles |
-| **Implants** | Every implant previously built on the server (via Generate or a profile's stager), with OS/arch/format/type/C2/staged status and delete (also cleans up the leftover per-name build source tree) |
+| **Profiles** | Save a reusable implant configuration server-side (same target/C2/cadence fields as Generate) so it can be referenced later — e.g. by a stage listener — without re-entering the config each time; list/delete saved profiles |
+| **Implants** | Every implant previously built on the server (via Generate or a stage listener), with OS/arch/format/type/C2/staged status, checkbox multi-select and mass delete (also cleans up the leftover per-name build source tree and the artifact file) |
 | **Event log** | Collapsible bottom drawer of real-time server events (agent connect/disconnect, jobs) via SSE |
 
 ## Known limitations / next steps
@@ -107,10 +120,22 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
 - **The native console is one-shot per command, not a persistent PTY.** Each
   Terminal/Sliver-console command spawns a fresh `sliver-client console --rc`
   invocation and exits, so anything whose effect lives on the *client*
-  connection — `socks5`, `portfwd`/`rportfwd`, interactive `shell` — doesn't
-  persist across commands. Request/response tasking and server-side jobs
-  (listeners, pivots, generate, armory) are unaffected. A real persistent,
-  streamed `sliver-client` session would be the fix, but isn't built.
+  connection — `portfwd`/`rportfwd`, interactive `shell` — doesn't persist
+  across commands. Request/response tasking and server-side jobs (listeners,
+  pivots, generate, armory) are unaffected. A real persistent, streamed
+  `sliver-client` session would be the fix, but isn't built.
+  **`socks5` used to be in that broken set** — it appeared to succeed and then
+  died with the invocation. It is now a typed feature hosted on the bridge's own
+  gRPC connection (`Sliver.StartSocks`) and driven from the session's *Pivoting*
+  tab, so it persists; the console command is redirected there.
+- **`armory install all` is expanded, not passed through.** The native command
+  asks `forms.Confirm("Install N aliases and M extensions?")` before doing
+  anything, and this console has no TTY to answer it, so it would exit having
+  installed nothing. The bridge instead reads the armory index and issues one
+  `armory install <name> -f` per package in a single batched rc script (`-f` is
+  required — without it an already-installed package raises an overwrite prompt
+  that hangs the same way). It reports distinct packages installed, since shared
+  dependencies like `coff-loader` are reinstalled once per dependent.
 - The separate **Sliver console** tab (`view-sliver`) is still its own
   hand-coded command dispatcher hitting the typed REST endpoints below, not the
   native `sliver-client` — it covers the common operator/agent commands but not
@@ -118,11 +143,15 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
   native console.
 - Downloads are pulled fully into memory (fine for typical files, not for
   multi-GB exfil).
-- No UI yet for DNS/WireGuard listeners, live interactive shell, SOCKS5 proxy,
-  port forwarding, Sliver's native `websites` payload hosting, or custom HTTP
-  C2 profiles (Generate always uses the `default` HTTP C2 config). Loot,
+- No UI yet for DNS/WireGuard listeners, live interactive shell, port
+  forwarding, Sliver's native `websites` payload hosting, or custom HTTP C2
+  profiles (Generate always uses the `default` HTTP C2 config). Loot,
   credentials, the hosts database, and registry/service/token operations are
   reachable via the native Terminal console but have no dedicated panel.
+- **Ligolo is driven, not supervised.** The bridge talks to a ligolo-ng proxy
+  you start and manage yourself; it does not launch, monitor, or restart the
+  daemon. If the proxy restarts it re-signs its JWTs with a fresh secret, which
+  the client handles by re-authenticating on a 401.
 
 ## Layout
 
@@ -130,9 +159,12 @@ This UI drives a C2 server — anyone who can reach it controls your implants.
 main.go           HTTP server, embed, auth middleware, flags
 api.go            REST + SSE route handlers
 sliver.go         gRPC client wrapper (connect, sessions, files, exec, generate,
-                  profiles, stagers, implant builds, pivots, events)
+                  profiles, stagers, implant builds, pivots, socks5, events)
 console.go        drives the real sliver-client binary for native per-agent
-                  and server-scope commands (one-shot --rc invocations)
+                  and server-scope commands (one-shot --rc invocations), plus
+                  the `armory install all` expansion
+ligolo.go         REST client for a ligolo-ng proxy's API (auth/JWT, agents,
+                  interfaces, routes, listeners, tunnels)
 listeners_db.go   stale-listener detection by reading the Sliver sqlite DB directly
 tools.go          small host-side helpers: saving a generated implant to disk,
                   running local commands (e.g. sqlite3)
