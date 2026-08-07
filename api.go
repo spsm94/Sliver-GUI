@@ -83,9 +83,6 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/profiles/{name}", hDeleteProfile)
 	mux.HandleFunc("GET /api/shellcode-encoders", hShellcodeEncoders)
 
-	// stage listeners (raw-TCP handoff of a profile's implant binary to a stager)
-	mux.HandleFunc("POST /api/stagers", hStartStager)
-
 	// previously generated implant builds
 	mux.HandleFunc("GET /api/implants", hImplants)
 	mux.HandleFunc("DELETE /api/implants/{name}", hDeleteImplant)
@@ -980,38 +977,6 @@ func hDeleteProfile(w http.ResponseWriter, r *http.Request) {
 		log.Printf("profile %q deleted, but clearing its prepend-size failed: %v", name, err)
 	}
 	writeJSON(w, map[string]bool{"ok": true})
-}
-
-// ---- stage listeners ----
-
-func hStartStager(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Host     string `json:"host"`
-		Port     uint32 `json:"port"`
-		Profile  string `json:"profile"`
-		AESKey   string `json:"aesKey"`
-		AESIv    string `json:"aesIv"`
-		RC4Key   string `json:"rc4Key"`
-		Compress string `json:"compress"`
-	}
-	if err := decode(r, &in); err != nil {
-		writeErr(w, err, 400)
-		return
-	}
-	if strings.TrimSpace(in.Profile) == "" {
-		writeErr(w, fmt.Errorf("profile is required"), 400)
-		return
-	}
-	if in.Port == 0 {
-		writeErr(w, fmt.Errorf("port is required"), 400)
-		return
-	}
-	job, err := sliver.StartStageListener(in.Host, in.Port, in.Profile, in.AESKey, in.AESIv, in.RC4Key, in.Compress)
-	if err != nil {
-		writeErr(w, err, 502)
-		return
-	}
-	writeJSON(w, job)
 }
 
 // ---- implant builds (previously generated artifacts) ----

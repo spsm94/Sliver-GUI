@@ -1085,37 +1085,6 @@ func (s *Sliver) DeleteProfile(name string) error {
 	return err
 }
 
-// ---- Stage listeners (raw-TCP handoff of a profile's full implant binary) ----
-
-// StartStageListener builds the (optionally compressed/encrypted) implant
-// binary for the named profile and starts a raw TCP job serving it to any
-// stager that connects — Sliver's "stage-listener" console command, driven
-// over gRPC instead of shelling out.
-func (s *Sliver) StartStageListener(host string, port uint32, profile, aesKey, aesIV, rc4Key, compress string) (*clientpb.StagerListener, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	stage, err := s.rpc.GenerateStage(ctx, &clientpb.GenerateStageReq{
-		Profile:       profile,
-		AESEncryptKey: aesKey,
-		AESEncryptIv:  aesIV,
-		RC4EncryptKey: rc4Key,
-		PrependSize:   true, // required framing for a raw-TCP stager
-		Compress:      strings.ToLower(compress),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build stage from profile %q: %w", profile, err)
-	}
-	ctx2, cancel2 := ctxTimeout()
-	defer cancel2()
-	return s.rpc.StartTCPStagerListener(ctx2, &clientpb.StagerListenerReq{
-		Protocol:    clientpb.StageProtocol_TCP,
-		Host:        host,
-		Port:        port,
-		ProfileName: profile,
-		Data:        stage.GetFile().GetData(),
-	})
-}
-
 // ---- Implant builds (previously generated artifacts) ----
 
 // ImplantBuildInfo summarizes one server-side build record for the Implants tab.
@@ -1166,8 +1135,3 @@ func outputFormat(f string) clientpb.OutputFormat {
 func (s *Sliver) Events(ctx context.Context) (rpcpb.SliverRPC_EventsClient, error) {
 	return s.rpc.Events(ctx, &commonpb.Empty{})
 }
-
-// AESEncryptionResult contains the encrypted payload and the encryption keys.
-
-
-
