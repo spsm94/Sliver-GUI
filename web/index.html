@@ -299,7 +299,9 @@
 
 <template id="util-stagelisteners-tpl">
   <div class="utilpane">
-    <p class="page-sub">Stage listeners serve full implants to first-stage payloads on connect.</p>
+    <p class="page-sub">Stage listeners serve full implants to first-stage payloads on connect. Build the
+      profile first under Payloads &rsaquo; Profiles &mdash; a <span class="mono">shellcode</span> profile is
+      the usual stage 2. Framing (prepend size) and encryption belong to the listener, not the profile.</p>
     <form class="limit" style="margin-bottom:20px">
       <div class="section">
         <h2>Start Stage Listener</h2>
@@ -312,8 +314,12 @@
               <select data-el="sl-profile" class="mono"></select>
             </label>
           </div>
-          <label class="field" style="margin-top:12px">
-            <input type="checkbox" data-el="sl-prepend-size"> Prepend size
+          <label class="opt" style="margin-top:12px">
+            <input type="checkbox" data-el="sl-prepend-size">
+            <span>Prepend size<span class="hint">Required by Metasploit <span class="mono">custom/*</span>
+              payloads (<span class="mono">msfvenom</span>, <span class="mono">msfconsole</span>) &mdash; they
+              read a 4-byte length before the stage. Leave off for custom stagers that don't expect the
+              prefix.</span></span>
           </label>
         </div>
         <div style="margin-top:12px;display:flex;gap:8px">
