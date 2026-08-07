@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -758,6 +759,37 @@ type GenerateOptions struct {
 	C2Port    uint32
 	Name      string
 	SaveDir   string // if set, also write the artifact to this dir on the bridge host
+
+	// Build options, mirroring the flags `generate` / `profiles new` bind in
+	// client/command/generate/commands.go. Every one is zero-valued by default,
+	// so a caller that omits them (the Generate modal) builds exactly as it did
+	// before these existed.
+	Debug            bool // --debug
+	Evasion          bool // --evasion
+	ObfuscateSymbols bool // inverse of --skip-symbols
+	RunAtLoad        bool // --run-at-load (shared library only)
+	NetGo            bool // --netgo
+
+	// Execution limits — the implant exits immediately unless the host matches.
+	LimitDomainJoined bool   // --limit-domainjoined
+	LimitHostname     string // --limit-hostname
+	LimitUsername     string // --limit-username
+	LimitDatetime     string // --limit-datetime
+	LimitFileExists   string // --limit-fileexists
+	LimitLocale       string // --limit-locale
+
+	// Shellcode tuning. Only meaningful when Format == "shellcode"; everything
+	// except ShellcodeCompress is Windows/Donut-only. See the Stagers doc:
+	// https://sliver.sh/docs?name=Stagers
+	ShellcodeEncoder  string // "" / "none" / an encoder name from /api/shellcode-encoders
+	ShellcodeCompress bool   // aPLib compression (windows, darwin, linux)
+	ShellcodeEntropy  uint32 // 1=none 2=random names 3=random+encrypt
+	ShellcodeExitOpt  uint32 // 1=exit thread 2=exit process 3=block
+	ShellcodeBypass   uint32 // 1=none 2=abort on failure 3=continue
+	ShellcodeHeaders  uint32 // 1=overwrite 2=keep
+	ShellcodeThread   bool   // run unmanaged EXE entrypoint as a new thread
+	ShellcodeUnicode  bool   // Unicode command line for unmanaged DLL entrypoints
+	ShellcodeOEP      uint32 // override original entry point (0 = default)
 }
 
 // DeleteBuild removes a saved implant build by name (its DB record and the
@@ -778,7 +810,10 @@ func (s *Sliver) DeleteBuild(name string) error {
 // buildImplantConfig translates the web GUI's flat GenerateOptions into the
 // ImplantConfig Sliver's generator expects. Shared by one-shot Generate() and
 // SaveProfile() so both build implants the same way.
-func buildImplantConfig(opts GenerateOptions) *clientpb.ImplantConfig {
+//
+// encoder is resolved by the caller via Sliver.resolveShellcodeEncoder, which
+// needs an RPC round-trip this pure function deliberately avoids.
+func buildImplantConfig(opts GenerateOptions, encoder clientpb.ShellcodeEncoder) *clientpb.ImplantConfig {
 	reconnect := opts.Reconnect
 	if reconnect <= 0 {
 		reconnect = 60
@@ -805,6 +840,24 @@ func buildImplantConfig(opts GenerateOptions) *clientpb.ImplantConfig {
 		TemplateName:        "sliver",  // server looks up the build template by name
 		HTTPC2ConfigName:    "default", // default HTTP C2 profile
 		ConnectionStrategy:  "s",       // sequential C2 attempts
+
+		Debug:            opts.Debug,
+		Evasion:          opts.Evasion,
+		ObfuscateSymbols: opts.ObfuscateSymbols,
+		RunAtLoad:        opts.RunAtLoad,
+		NetGoEnabled:     opts.NetGo,
+
+		LimitDomainJoined: opts.LimitDomainJoined,
+		LimitHostname:     opts.LimitHostname,
+		LimitUsername:     opts.LimitUsername,
+		LimitDatetime:     opts.LimitDatetime,
+		LimitFileExists:   opts.LimitFileExists,
+		LimitLocale:       opts.LimitLocale,
+
+		ShellcodeEncoder: encoder,
+		// Legacy mirror of the encoder choice; the server still consults it when
+		// ShellcodeEncoder is NONE (see client/command/generate/generate.go).
+		SGNEnabled: encoder == clientpb.ShellcodeEncoder_SHIKATA_GA_NAI,
 	}
 	var c2 []*clientpb.ImplantC2
 	switch opts.C2Type {
@@ -841,7 +894,134 @@ func buildImplantConfig(opts GenerateOptions) *clientpb.ImplantConfig {
 	case clientpb.OutputFormat_SERVICE:
 		cfg.IsService = true
 	}
+	cfg.ShellcodeConfig = buildShellcodeConfig(opts, cfg.Format)
 	return cfg
+}
+
+// buildShellcodeConfig mirrors parseShellcodeFlags in
+// client/command/generate/generate.go: the shellcode knobs apply only to
+// `--format shellcode`, and outside Windows only compression is honoured, so
+// sending the Donut-specific fields anywhere else would be noise at best.
+// Returns nil when the format/OS combination has nothing to configure.
+func buildShellcodeConfig(opts GenerateOptions, format clientpb.OutputFormat) *clientpb.ShellcodeConfig {
+	if format != clientpb.OutputFormat_SHELLCODE {
+		return nil
+	}
+	// Compress is a tri-state on the wire, not a bool: 1 = none, 2 = aPLib.
+	compress := uint32(1)
+	if opts.ShellcodeCompress {
+		compress = 2
+	}
+	if opts.OS != "windows" {
+		// darwin (beignet) and linux (malasada) only implement compression.
+		if opts.OS != "darwin" && opts.OS != "linux" {
+			return nil
+		}
+		return &clientpb.ShellcodeConfig{Compress: compress}
+	}
+	// Donut rejects out-of-range values, so fall back to its own defaults
+	// rather than forwarding a zero from a client that omitted the field.
+	entropy := clampU32(opts.ShellcodeEntropy, 1, 3, 1)
+	exitOpt := clampU32(opts.ShellcodeExitOpt, 1, 3, 1)
+	bypass := clampU32(opts.ShellcodeBypass, 1, 3, 3)
+	headers := clampU32(opts.ShellcodeHeaders, 1, 2, 1)
+	return &clientpb.ShellcodeConfig{
+		Entropy:  entropy,
+		Compress: compress,
+		ExitOpt:  exitOpt,
+		Bypass:   bypass,
+		Headers:  headers,
+		Thread:   opts.ShellcodeThread,
+		Unicode:  opts.ShellcodeUnicode,
+		OEP:      opts.ShellcodeOEP,
+	}
+}
+
+// clampU32 returns v when it falls within [lo, hi], and def otherwise.
+func clampU32(v, lo, hi, def uint32) uint32 {
+	if v < lo || v > hi {
+		return def
+	}
+	return v
+}
+
+// ShellcodeEncoders reports the encoders the server can apply, keyed by the
+// architecture they are compatible with ("amd64" -> ["shikata_ga_nai", ...]).
+// Compatibility is per-arch, so the UI has to ask rather than hardcode a list.
+func (s *Sliver) ShellcodeEncoders() (map[string][]string, error) {
+	ctx, cancel := ctxTimeout()
+	defer cancel()
+	resp, err := s.rpc.ShellcodeEncoderMap(ctx, &commonpb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for arch, archMap := range resp.GetEncoders() {
+		names := make([]string, 0, len(archMap.GetEncoders()))
+		for name := range archMap.GetEncoders() {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out[arch] = names
+	}
+	return out, nil
+}
+
+// badRequest marks an error as caused by the caller's input rather than by the
+// Sliver server, so handlers can answer 400 instead of the blanket 502 they use
+// for anything coming back over gRPC.
+type badRequest struct{ error }
+
+func isBadRequest(err error) bool {
+	var b badRequest
+	return errors.As(err, &b)
+}
+
+// resolveShellcodeEncoder maps an operator-chosen encoder name to the enum the
+// server expects, rejecting names that are not compatible with the target arch.
+// An empty name, "none", or a non-shellcode format all mean "no encoding".
+func (s *Sliver) resolveShellcodeEncoder(opts GenerateOptions) (clientpb.ShellcodeEncoder, error) {
+	name := strings.ToLower(strings.TrimSpace(opts.ShellcodeEncoder))
+	name = strings.ReplaceAll(name, "-", "_")
+	if name == "" || name == "none" {
+		return clientpb.ShellcodeEncoder_NONE, nil
+	}
+	if outputFormat(opts.Format) != clientpb.OutputFormat_SHELLCODE {
+		// Silently dropping this would build something the operator did not ask
+		// for; the console warns and continues, but a GUI can afford to object.
+		return clientpb.ShellcodeEncoder_NONE, badRequest{fmt.Errorf("shellcode encoder %q requires the shellcode output format", opts.ShellcodeEncoder)}
+	}
+	ctx, cancel := ctxTimeout()
+	defer cancel()
+	resp, err := s.rpc.ShellcodeEncoderMap(ctx, &commonpb.Empty{})
+	if err != nil {
+		return clientpb.ShellcodeEncoder_NONE, err
+	}
+	arch := normalizeShellcodeArch(opts.Arch)
+	archMap := resp.GetEncoders()[arch]
+	if archMap == nil {
+		return clientpb.ShellcodeEncoder_NONE, badRequest{fmt.Errorf("no shellcode encoders available for %s", arch)}
+	}
+	encoder, ok := archMap.GetEncoders()[name]
+	if !ok {
+		return clientpb.ShellcodeEncoder_NONE, badRequest{fmt.Errorf("shellcode encoder %q is not compatible with %s", opts.ShellcodeEncoder, arch)}
+	}
+	return encoder, nil
+}
+
+// normalizeShellcodeArch folds the arch aliases Sliver accepts onto the keys
+// used by the encoder map (mirrors the identically named client helper).
+func normalizeShellcodeArch(arch string) string {
+	switch strings.ToLower(strings.TrimSpace(arch)) {
+	case "amd64", "x64", "x86_64":
+		return "amd64"
+	case "386", "x86", "i386":
+		return "386"
+	case "arm64", "aarch64":
+		return "arm64"
+	default:
+		return strings.ToLower(strings.TrimSpace(arch))
+	}
 }
 
 // namedPipeURL normalizes an operator-entered pipe path (Windows-style
@@ -859,9 +1039,13 @@ func namedPipeURL(raw string) string {
 }
 
 func (s *Sliver) Generate(opts GenerateOptions) (*clientpb.Generate, error) {
+	encoder, err := s.resolveShellcodeEncoder(opts)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	return s.rpc.Generate(ctx, &clientpb.GenerateReq{Name: opts.Name, Config: buildImplantConfig(opts)})
+	return s.rpc.Generate(ctx, &clientpb.GenerateReq{Name: opts.Name, Config: buildImplantConfig(opts, encoder)})
 }
 
 // ---- Implant profiles (saved generate configs) ----
@@ -879,9 +1063,13 @@ func (s *Sliver) Profiles() ([]*clientpb.ImplantProfile, error) {
 
 // SaveProfile creates or updates (by name) a saved implant profile.
 func (s *Sliver) SaveProfile(name string, opts GenerateOptions) (*clientpb.ImplantProfile, error) {
+	encoder, err := s.resolveShellcodeEncoder(opts)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := ctxTimeout()
 	defer cancel()
-	return s.rpc.SaveImplantProfile(ctx, &clientpb.ImplantProfile{Name: name, Config: buildImplantConfig(opts)})
+	return s.rpc.SaveImplantProfile(ctx, &clientpb.ImplantProfile{Name: name, Config: buildImplantConfig(opts, encoder)})
 }
 
 // DeleteProfile removes a saved implant profile by name.

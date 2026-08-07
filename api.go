@@ -82,6 +82,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/profiles", hProfiles)
 	mux.HandleFunc("POST /api/profiles", hSaveProfile)
 	mux.HandleFunc("DELETE /api/profiles/{name}", hDeleteProfile)
+	mux.HandleFunc("GET /api/shellcode-encoders", hShellcodeEncoders)
 
 	// stage listeners (raw-TCP handoff of a profile's implant binary to a stager)
 	mux.HandleFunc("POST /api/stagers", hStartStager)
@@ -844,7 +845,7 @@ func hGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := sliver.Generate(opts)
 	if err != nil {
-		writeErr(w, err, 502)
+		writeErr(w, err, errStatus(err))
 		return
 	}
 	savedPath, err := saveArtifact(dir, resp.File.Name, resp.File.Data)
@@ -873,6 +874,15 @@ func validateC2Opts(opts GenerateOptions) error {
 		return fmt.Errorf("C2 port is required")
 	}
 	return nil
+}
+
+// errStatus picks the HTTP status for an error out of the Sliver layer: 400 for
+// something the caller got wrong, 502 for anything the server itself refused.
+func errStatus(err error) int {
+	if isBadRequest(err) {
+		return 400
+	}
+	return 502
 }
 
 // ---- implant profiles (saved generate configs) ----
@@ -915,10 +925,22 @@ func hSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	profile, err := sliver.SaveProfile(name, opts)
 	if err != nil {
-		writeErr(w, err, 502)
+		writeErr(w, err, errStatus(err))
 		return
 	}
 	writeJSON(w, profile)
+}
+
+// hShellcodeEncoders lists the shellcode encoders the server offers, keyed by
+// compatible architecture, so the profile dialog can populate its encoder menu
+// with only the ones that will actually build for the selected target.
+func hShellcodeEncoders(w http.ResponseWriter, r *http.Request) {
+	encoders, err := sliver.ShellcodeEncoders()
+	if err != nil {
+		writeErr(w, err, 502)
+		return
+	}
+	writeJSON(w, encoders)
 }
 
 func hDeleteProfile(w http.ResponseWriter, r *http.Request) {

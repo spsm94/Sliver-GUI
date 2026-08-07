@@ -338,84 +338,14 @@
   <div class="utilpane">
     <p class="page-sub">Save a reusable implant configuration on the server. Reference a saved profile from
       Listeners &rsaquo; Stage Listeners to serve its full binary to a first-stage payload on connect.</p>
-    <form class="limit" data-el="prof-form">
-      <div class="section">
-        <h2>Profile</h2>
-        <div class="card">
-          <label class="field" style="margin:0"><span class="lbl">Name (required, unique)</span>
-            <input data-el="prof-name" class="mono" required placeholder="my-profile">
-          </label>
-        </div>
-      </div>
-      <div class="section">
-        <h2>Target</h2>
-        <div class="card">
-          <div class="grid2">
-            <label class="field"><span class="lbl">OS</span>
-              <select data-el="prof-os"><option>windows</option><option>linux</option><option>darwin</option></select>
-            </label>
-            <label class="field"><span class="lbl">Architecture</span>
-              <select data-el="prof-arch"><option>amd64</option><option>386</option><option>arm64</option></select>
-            </label>
-            <label class="field"><span class="lbl">Format</span>
-              <select data-el="prof-format">
-                <option value="exe">Executable</option><option value="shared">Shared library</option>
-                <option value="shellcode">Shellcode</option><option value="service">Service</option>
-              </select>
-            </label>
-            <label class="field"><span class="lbl">Type</span>
-              <select data-el="prof-type"><option value="session">Session</option><option value="beacon">Beacon</option></select>
-            </label>
-          </div>
-        </div>
-      </div>
-      <div class="section">
-        <h2>C2 endpoint</h2>
-        <div class="card">
-          <div class="field">
-            <span class="lbl">Type</span>
-            <select data-el="prof-c2-type" style="width:100%">
-              <option value="mtls">mTLS</option><option value="http">HTTP</option>
-              <option value="https">HTTPS</option><option value="named-pipe">Named Pipe</option>
-            </select>
-          </div>
-          <div class="field" data-el="prof-c2-host-field">
-            <span class="lbl">C2 host (pick an interface, or type a hostname)</span>
-            <input data-el="prof-c2-host" class="mono" list="prof-c2-host-list" style="width:100%" placeholder="10.10.14.2 or cdn.example.com">
-            <datalist id="prof-c2-host-list" data-el="prof-c2-host-list"></datalist>
-          </div>
-          <div class="field" data-el="prof-c2-port-field">
-            <span class="lbl">C2 port</span>
-            <input data-el="prof-c2-port" class="mono" type="number" placeholder="8888" style="width:100%">
-          </div>
-          <div class="field" data-el="prof-c2-pipe-field" style="display:none">
-            <span class="lbl">Pipe path</span>
-            <input data-el="prof-c2-pipe" class="mono" placeholder="\\.\pipe\MySliver" style="width:100%">
-          </div>
-        </div>
-      </div>
-      <div class="section" data-el="prof-beacon-section">
-        <h2>Beacon cadence</h2>
-        <div class="card">
-          <div class="grid2">
-            <label class="field"><span class="lbl">Sleep interval (seconds)</span><input data-el="prof-interval" type="number" min="1" value="60"></label>
-            <label class="field"><span class="lbl">Jitter (seconds)</span><input data-el="prof-jitter" type="number" min="0" value="30"></label>
-            <label class="field"><span class="lbl">Reconnect interval (seconds)</span><input data-el="prof-reconnect" type="number" min="1" value="60"></label>
-            <label class="field"><span class="lbl">Max connection errors</span><input data-el="prof-max-errors" type="number" min="1" value="1000"></label>
-            <label class="field"><span class="lbl">Poll timeout (seconds)</span><input data-el="prof-poll" type="number" min="1" value="360"></label>
-          </div>
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:12px">
-        <button class="btn emerald" type="submit" data-el="prof-btn">save profile</button>
-        <span data-el="prof-status"></span>
-      </div>
-    </form>
-    <div class="section" style="margin-top:18px">
+    <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+      <button class="btn emerald" data-el="prof-new">New profile&hellip;</button>
+    </div>
+    <div class="section">
       <h2>Saved profiles</h2>
       <div class="tbl-wrap">
         <table class="tbl">
-          <thead><tr><th>Name</th><th>OS/Arch</th><th>Format</th><th>Type</th><th>C2</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>OS/Arch</th><th>Format</th><th>Type</th><th>C2</th><th>Options</th><th></th></tr></thead>
           <tbody data-el="profiles-body"></tbody>
         </table>
       </div>
@@ -711,6 +641,106 @@
       </label>
     </div>
     <div class="modal-foot"><span class="spacer" id="mgMsg"></span><button class="btn" data-close>Cancel</button><button class="btn emerald" id="mgSave">Generate</button></div>
+  </div>
+
+  <div class="modal-box" id="modalProfile" style="display:none">
+    <div class="modal-head" id="mpHead">New Implant Profile</div>
+    <div class="modal-body form" style="max-height:64vh">
+      <label class="field" style="margin:0"><span class="lbl">Name (required, unique)</span><input id="mpName" class="mono" placeholder="win-shellcode"></label>
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+      <div class="grid2">
+        <label class="field" style="margin:0"><span class="lbl">OS</span><select id="mpOs"><option>windows</option><option>linux</option><option>darwin</option></select></label>
+        <label class="field" style="margin:0"><span class="lbl">Architecture</span><select id="mpArch"><option value="amd64">x64</option><option value="386">x86</option><option value="arm64">arm64</option></select></label>
+        <label class="field" style="margin:0"><span class="lbl">Format</span>
+          <select id="mpFormat">
+            <option value="exe">Executable</option><option value="shared">Shared library</option>
+            <option value="shellcode">Shellcode</option><option value="service">Service</option>
+          </select>
+        </label>
+        <label class="field" style="margin:0"><span class="lbl">Type</span><select id="mpType"><option value="session">Session</option><option value="beacon">Beacon</option></select></label>
+      </div>
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+      <label class="field" style="margin:0"><span class="lbl">C2 type</span>
+        <select id="mpC2Type">
+          <option value="mtls">mTLS</option><option value="http">HTTP</option>
+          <option value="https">HTTPS</option><option value="named-pipe">Named Pipe</option>
+        </select>
+      </label>
+      <div class="grid2" id="mpC2HostPortRow">
+        <label class="field" style="margin:0"><span class="lbl">C2 host</span>
+          <input id="mpC2Host" class="mono" list="mp-c2-host-list" placeholder="10.10.14.2 or cdn.example.com">
+          <datalist id="mp-c2-host-list"></datalist>
+        </label>
+        <label class="field" style="margin:0"><span class="lbl">C2 port</span><input id="mpC2Port" class="mono" type="number" placeholder="8888"></label>
+      </div>
+      <label class="field" id="mpPipeField" style="display:none;margin:0"><span class="lbl">Pipe path</span><input id="mpPipe" class="mono" placeholder="\\.\pipe\MySliver"></label>
+
+      <div id="mpBeaconSection">
+        <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+        <div class="grid2">
+          <label class="field" style="margin:0"><span class="lbl">Sleep interval (s)</span><input id="mpInterval" type="number" min="1" value="60"></label>
+          <label class="field" style="margin:0"><span class="lbl">Jitter (s)</span><input id="mpJitter" type="number" min="0" value="30"></label>
+        </div>
+      </div>
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+      <div class="grid2">
+        <label class="field" style="margin:0"><span class="lbl">Reconnect (s)</span><input id="mpReconnect" type="number" min="1" value="60"></label>
+        <label class="field" style="margin:0"><span class="lbl">Max connection errors</span><input id="mpMaxErrors" type="number" min="1" value="1000"></label>
+        <label class="field" style="margin:0"><span class="lbl">Poll timeout (s)</span><input id="mpPoll" type="number" min="1" value="360"></label>
+      </div>
+
+      <div class="opt-group">
+        <span class="lbl">Build options</span>
+        <div class="opt-grid">
+          <label class="opt"><input type="checkbox" id="mpDebug"><span>Debug build<span class="hint">verbose implant logging</span></span></label>
+          <label class="opt"><input type="checkbox" id="mpEvasion"><span>Evasion<span class="hint">unhook user-space API hooks</span></span></label>
+          <label class="opt"><input type="checkbox" id="mpObfuscate"><span>Obfuscate symbols<span class="hint">Sliver's CLI default &mdash; but builds take far longer</span></span></label>
+          <label class="opt"><input type="checkbox" id="mpNetGo"><span>Force netgo<span class="hint">pure-Go resolver, no libc</span></span></label>
+          <label class="opt" id="mpRunAtLoadOpt"><input type="checkbox" id="mpRunAtLoad"><span>Run at load<span class="hint">entrypoint from DllMain/constructor</span></span></label>
+          <label class="opt"><input type="checkbox" id="mpLimitDomain"><span>Domain-joined only<span class="hint">exit unless the host is domain-joined</span></span></label>
+        </div>
+      </div>
+
+      <div class="opt-group" id="mpShellcodeGroup" style="display:none">
+        <span class="lbl">Shellcode options</span>
+        <p class="opt-note" id="mpShellcodeNote"></p>
+        <label class="field"><span class="lbl">Encoder</span><select id="mpEncoder"><option value="none">none</option></select></label>
+        <div class="opt-grid" style="margin-bottom:10px">
+          <label class="opt"><input type="checkbox" id="mpScCompress"><span>Compress (aPLib)</span></label>
+          <label class="opt mp-win"><input type="checkbox" id="mpScThread"><span>Run EXE entrypoint as a thread</span></label>
+          <label class="opt mp-win"><input type="checkbox" id="mpScUnicode"><span>Unicode DLL command line</span></label>
+        </div>
+        <div class="grid2 mp-win">
+          <label class="field" style="margin:0"><span class="lbl">Entropy</span>
+            <select id="mpScEntropy"><option value="1">1 &mdash; none</option><option value="2">2 &mdash; random names</option><option value="3">3 &mdash; random + encrypt</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">Exit option</span>
+            <select id="mpScExit"><option value="1">1 &mdash; exit thread</option><option value="2">2 &mdash; exit process</option><option value="3">3 &mdash; block</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">AMSI/WLDP bypass</span>
+            <select id="mpScBypass"><option value="1">1 &mdash; none</option><option value="2">2 &mdash; abort on failure</option><option value="3">3 &mdash; continue on failure</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">Headers</span>
+            <select id="mpScHeaders"><option value="1">1 &mdash; overwrite</option><option value="2">2 &mdash; keep</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">Entry point override (0 = default)</span><input id="mpScOEP" type="number" min="0" value="0"></label>
+        </div>
+      </div>
+
+      <div class="opt-group">
+        <span class="lbl">Execution limits (optional)</span>
+        <p class="opt-note">The implant exits immediately unless the host matches every limit set here.</p>
+        <div class="grid2">
+          <label class="field" style="margin:0"><span class="lbl">Hostname</span><input id="mpLimitHost" class="mono" placeholder="WKSTN-01"></label>
+          <label class="field" style="margin:0"><span class="lbl">Username</span><input id="mpLimitUser" class="mono" placeholder="jdoe"></label>
+          <label class="field" style="margin:0"><span class="lbl">File exists</span><input id="mpLimitFile" class="mono" placeholder="C:\\Windows\\System32\\notepad.exe"></label>
+          <label class="field" style="margin:0"><span class="lbl">Locale</span><input id="mpLimitLocale" class="mono" placeholder="en-US"></label>
+          <label class="field" style="margin:0"><span class="lbl">Not after (datetime)</span><input id="mpLimitDate" class="mono" placeholder="2026-12-31 23:59:59"></label>
+        </div>
+      </div>
+      <span id="mpWarn" class="warn-note" style="display:none"></span>
+    </div>
+    <div class="modal-foot"><span class="spacer" id="mpMsg"></span><button class="btn" data-close>Cancel</button><button class="btn emerald" id="mpSave">Save profile</button></div>
   </div>
 
   <div class="modal-box narrow" id="modalAbout" style="display:none">

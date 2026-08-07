@@ -139,7 +139,6 @@ async function loadInterfaces() {
   try { STATE.interfaces = await api('GET', '/api/interfaces'); } catch { STATE.interfaces = []; }
   fillIfaceSelect($('#mlHost'), { allInterfaces: true, v4only: true, default: '0.0.0.0' });
   fillIfaceSelect($('#mgHost'), { v4only: true, default: preferredV4() });
-  fillIfaceSelect($('#msHost'), { allInterfaces: true, v4only: true, default: '0.0.0.0' });
   updateBindWarning();
 }
 
@@ -1701,61 +1700,38 @@ function fmtC2(cfg) {
   const urls = (cfg.C2 || []).map((c) => c.URL);
   return urls.length ? urls.join(', ') : '—';
 }
-function wireC2Combo(pane, prefix) {
-  const typeSel = elIn(pane, `${prefix}-c2-type`);
-  const update = () => {
-    const isPipe = typeSel.value === 'named-pipe';
-    elIn(pane, `${prefix}-c2-host-field`).style.display = isPipe ? 'none' : '';
-    elIn(pane, `${prefix}-c2-port-field`).style.display = isPipe ? 'none' : '';
-    elIn(pane, `${prefix}-c2-pipe-field`).style.display = isPipe ? '' : 'none';
-  };
-  typeSel.addEventListener('change', update);
-  update();
-}
-function readC2Combo(pane, prefix) {
-  const type = elIn(pane, `${prefix}-c2-type`).value;
-  if (type === 'named-pipe') return { C2Type: type, C2Host: elIn(pane, `${prefix}-c2-pipe`).value.trim(), C2Port: 0 };
-  return { C2Type: type, C2Host: elIn(pane, `${prefix}-c2-host`).value.trim(), C2Port: parseInt(elIn(pane, `${prefix}-c2-port`).value, 10) || 0 };
+// Condense a profile's build options into one table cell. Only non-default
+// settings are listed, so the column stays empty for a plain profile instead of
+// repeating the same six "off"s on every row.
+const SHELLCODE_ENCODER_NAME = { 1: 'shikata_ga_nai', 2: 'xor', 3: 'xor_dynamic' };
+function fmtProfileOpts(cfg) {
+  const on = [];
+  if (cfg.Debug) on.push('debug');
+  if (cfg.Evasion) on.push('evasion');
+  if (cfg.ObfuscateSymbols) on.push('obfuscated');
+  if (cfg.NetGoEnabled) on.push('netgo');
+  if (cfg.RunAtLoad) on.push('run-at-load');
+  if (cfg.LimitDomainJoined) on.push('domain-joined');
+  for (const [label, v] of [['host', cfg.LimitHostname], ['user', cfg.LimitUsername],
+    ['file', cfg.LimitFileExists], ['locale', cfg.LimitLocale], ['before', cfg.LimitDatetime]]) {
+    if (v) on.push(`${label}=${v}`);
+  }
+  if (cfg.ShellcodeEncoder) on.push(SHELLCODE_ENCODER_NAME[cfg.ShellcodeEncoder] || 'encoded');
+  const sc = cfg.ShellcodeConfig;
+  // Compress is 1=none / 2=aPLib on the wire, so only 2 is worth reporting.
+  if (sc && sc.Compress === 2) on.push('compressed');
+  if (sc && sc.Entropy > 1) on.push(`entropy=${sc.Entropy}`);
+  return on.join(', ');
 }
 function initProfilesPane(pane) {
-  wireC2Combo(pane, 'prof');
-  elIn(pane, 'prof-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const st = elIn(pane, 'prof-status');
-    const name = elIn(pane, 'prof-name').value.trim();
-    if (!name) { st.className = 'err'; st.textContent = 'enter a profile name'; return; }
-    const c2 = readC2Combo(pane, 'prof');
-    if (!c2.C2Host) { st.className = 'err'; st.textContent = c2.C2Type === 'named-pipe' ? 'enter a pipe path' : 'select a C2 host'; return; }
-    if (c2.C2Type !== 'named-pipe' && !c2.C2Port) { st.className = 'err'; st.textContent = 'specify a C2 port'; return; }
-    const opts = {
-      Name: name,
-      OS: elIn(pane, 'prof-os').value, Arch: elIn(pane, 'prof-arch').value,
-      Format: elIn(pane, 'prof-format').value, IsBeacon: elIn(pane, 'prof-type').value === 'beacon',
-      Interval: parseInt(elIn(pane, 'prof-interval').value, 10) || 60,
-      Jitter: parseInt(elIn(pane, 'prof-jitter').value, 10) || 0,
-      Reconnect: parseInt(elIn(pane, 'prof-reconnect').value, 10) || 60,
-      MaxErrors: parseInt(elIn(pane, 'prof-max-errors').value, 10) || 1000,
-      Poll: parseInt(elIn(pane, 'prof-poll').value, 10) || 360,
-      ...c2,
-    };
-    const btn = elIn(pane, 'prof-btn');
-    btn.disabled = true; st.className = 'muted mono'; st.textContent = 'saving…';
-    try {
-      await api('POST', '/api/profiles', opts);
-      st.className = 'ok'; st.textContent = `saved profile "${name}"`;
-      loadProfiles(pane);
-    } catch (e) { st.className = 'err'; st.textContent = e.message; }
-    finally { btn.disabled = false; }
-  });
+  elIn(pane, 'prof-new').onclick = () => openProfileModal();
 }
 async function loadProfiles(pane) {
-  fillDatalist(elIn(pane, 'prof-c2-host-list'), { v4only: true });
-  if (!elIn(pane, 'prof-c2-host').value) elIn(pane, 'prof-c2-host').value = preferredV4();
   const body = elIn(pane, 'profiles-body');
-  body.innerHTML = '<tr><td colspan="6" class="muted">loading…</td></tr>';
+  body.innerHTML = '<tr><td colspan="7" class="muted">loading…</td></tr>';
   try {
     const profiles = await api('GET', '/api/profiles');
-    if (!profiles || !profiles.length) { body.innerHTML = '<tr><td colspan="6" class="muted">no saved profiles</td></tr>'; }
+    if (!profiles || !profiles.length) { body.innerHTML = '<tr><td colspan="7" class="muted">no saved profiles</td></tr>'; }
     else {
       body.innerHTML = '';
       for (const p of profiles) {
@@ -1764,7 +1740,8 @@ async function loadProfiles(pane) {
         tr.innerHTML =
           `<td class="mono">${esc(p.Name)}</td><td>${esc(cfg.GOOS)}/${esc(cfg.GOARCH)}</td>` +
           `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
-          `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td><td></td>`;
+          `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td>` +
+          `<td class="mono muted" style="font-size:11.5px">${esc(fmtProfileOpts(cfg))}</td><td></td>`;
         const rm = el('button', 'btn danger sm', 'delete');
         rm.onclick = async () => {
           if (!confirm(`Delete profile "${p.Name}"?`)) return;
@@ -1774,7 +1751,7 @@ async function loadProfiles(pane) {
         body.appendChild(tr);
       }
     }
-  } catch (e) { body.innerHTML = `<tr><td colspan="6" class="err">${esc(e.message)}</td></tr>`; }
+  } catch (e) { body.innerHTML = `<tr><td colspan="7" class="err">${esc(e.message)}</td></tr>`; }
 }
 
 // ----- Implants (Payloads > Implant Builds) -----
@@ -1861,7 +1838,7 @@ async function loadPivotGraphTable(pane) {
 // modal dialogs: About, Start Listener, Generate Payload
 // =====================================================================
 const veil = $('#modalveil');
-const modals = { listener: $('#modalListener'), generate: $('#modalGenerate'), about: $('#modalAbout') };
+const modals = { listener: $('#modalListener'), generate: $('#modalGenerate'), profile: $('#modalProfile'), about: $('#modalAbout') };
 function openModal(which) {
   Object.values(modals).forEach((m) => m.style.display = 'none');
   modals[which].style.display = 'flex';
@@ -2097,6 +2074,143 @@ $('#mgSave').onclick = async () => {
     setTimeout(closeModal, 2000);
   } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
   finally { $('#mgSave').disabled = false; }
+};
+
+// ----- New Implant Profile -----
+// A profile is a saved ImplantConfig — the blueprint `stage-listener` builds
+// its stage 2 from. It exposes the same build knobs `profiles new` binds
+// (client/command/generate/commands.go), including the shellcode tuning
+// documented at https://sliver.sh/docs/?name=Stagers. Everything defaults to
+// Sliver's own default, so an operator who only fills in name + C2 gets the
+// same implant the old inline form produced.
+
+// Shellcode encoder compatibility is per-architecture and only the server knows
+// which encoders it has, so the list is fetched once and re-filtered on every
+// arch change rather than hardcoded here.
+let SHELLCODE_ENCODERS = null;
+async function loadShellcodeEncoders() {
+  if (SHELLCODE_ENCODERS) return SHELLCODE_ENCODERS;
+  try { SHELLCODE_ENCODERS = await api('GET', '/api/shellcode-encoders'); }
+  catch { SHELLCODE_ENCODERS = {}; }
+  return SHELLCODE_ENCODERS;
+}
+async function refreshEncoderOptions() {
+  const map = await loadShellcodeEncoders();
+  const sel = $('#mpEncoder');
+  const names = map[$('#mpArch').value] || [];
+  setSelectOptions(sel, [['none', 'none'], ...names.map((n) => [n, n])]);
+}
+
+function updateProfileTargetFields() {
+  const os = $('#mpOs').value;
+  setSelectOptions($('#mpArch'), GEN_ARCHES[os] || GEN_ARCHES.linux);
+  let formats = GEN_FORMATS[os] || GEN_FORMATS.linux;
+  const scArches = SHELLCODE_ARCHES[os];
+  if (scArches && !scArches.includes($('#mpArch').value)) formats = formats.filter(([v]) => v !== 'shellcode');
+  setSelectOptions($('#mpFormat'), formats);
+  updateProfileFormatFields();
+  refreshEncoderOptions();
+}
+function updateProfileFormatFields() {
+  const os = $('#mpOs').value, format = $('#mpFormat').value;
+  const isShellcode = format === 'shellcode';
+  $('#mpShellcodeGroup').style.display = isShellcode ? '' : 'none';
+  // RunAtLoad drives the shared-library entrypoint (DllMain/constructor); it
+  // means nothing for an exe or a service binary.
+  $('#mpRunAtLoadOpt').style.display = format === 'shared' ? '' : 'none';
+  // Everything but compression is Donut, and Donut is Windows-only — macOS
+  // (beignet) and Linux (malasada) ignore the rest, so don't offer them.
+  const winOnly = isShellcode && os === 'windows';
+  $$('.mp-win', $('#modalProfile')).forEach((n) => n.style.display = winOnly ? '' : 'none');
+  $('#mpShellcodeNote').textContent = winOnly
+    ? 'Windows shellcode is generated with Donut; all options below apply.'
+    : `${os} shellcode only supports compression — the Donut-specific options do not apply.`;
+}
+function updateProfileC2Fields() {
+  const isPipe = $('#mpC2Type').value === 'named-pipe';
+  $('#mpC2HostPortRow').style.display = isPipe ? 'none' : '';
+  $('#mpPipeField').style.display = isPipe ? '' : 'none';
+}
+function updateProfileBeaconFields() {
+  $('#mpBeaconSection').style.display = $('#mpType').value === 'beacon' ? '' : 'none';
+}
+$('#mpOs').addEventListener('change', updateProfileTargetFields);
+$('#mpArch').addEventListener('change', updateProfileTargetFields);
+$('#mpFormat').addEventListener('change', updateProfileFormatFields);
+$('#mpC2Type').addEventListener('change', updateProfileC2Fields);
+$('#mpType').addEventListener('change', updateProfileBeaconFields);
+
+function openProfileModal() {
+  $('#mpMsg').textContent = '';
+  $('#mpWarn').style.display = 'none';
+  $('#mpName').value = '';
+  fillDatalist($('#mp-c2-host-list'), { v4only: true });
+  if (!$('#mpC2Host').value) $('#mpC2Host').value = preferredV4();
+  updateProfileTargetFields();
+  updateProfileC2Fields();
+  updateProfileBeaconFields();
+  openModal('profile');
+  $('#mpName').focus();
+}
+
+$('#mpSave').onclick = async () => {
+  const msg = $('#mpMsg');
+  const name = $('#mpName').value.trim();
+  if (!name) { msg.className = 'err'; msg.textContent = 'enter a profile name'; return; }
+  const type = $('#mpC2Type').value;
+  const c2 = type === 'named-pipe'
+    ? { C2Type: type, C2Host: $('#mpPipe').value.trim(), C2Port: 0 }
+    : { C2Type: type, C2Host: $('#mpC2Host').value.trim(), C2Port: parseInt($('#mpC2Port').value, 10) || 0 };
+  if (!c2.C2Host) { msg.className = 'err'; msg.textContent = type === 'named-pipe' ? 'enter a pipe path' : 'select a C2 host'; return; }
+  if (type !== 'named-pipe' && !c2.C2Port) { msg.className = 'err'; msg.textContent = 'specify a C2 port'; return; }
+  const format = $('#mpFormat').value;
+  const opts = {
+    Name: name,
+    OS: $('#mpOs').value, Arch: $('#mpArch').value, Format: format,
+    IsBeacon: $('#mpType').value === 'beacon',
+    Interval: parseInt($('#mpInterval').value, 10) || 60,
+    Jitter: parseInt($('#mpJitter').value, 10) || 0,
+    Reconnect: parseInt($('#mpReconnect').value, 10) || 60,
+    MaxErrors: parseInt($('#mpMaxErrors').value, 10) || 1000,
+    Poll: parseInt($('#mpPoll').value, 10) || 360,
+
+    Debug: $('#mpDebug').checked,
+    Evasion: $('#mpEvasion').checked,
+    ObfuscateSymbols: $('#mpObfuscate').checked,
+    NetGo: $('#mpNetGo').checked,
+    RunAtLoad: format === 'shared' && $('#mpRunAtLoad').checked,
+    LimitDomainJoined: $('#mpLimitDomain').checked,
+    LimitHostname: $('#mpLimitHost').value.trim(),
+    LimitUsername: $('#mpLimitUser').value.trim(),
+    LimitFileExists: $('#mpLimitFile').value.trim(),
+    LimitLocale: $('#mpLimitLocale').value.trim(),
+    LimitDatetime: $('#mpLimitDate').value.trim(),
+    ...c2,
+  };
+  // The server rejects shellcode options on a non-shellcode build, so only send
+  // them when they apply. Donut fields likewise go only to Windows.
+  if (format === 'shellcode') {
+    opts.ShellcodeEncoder = $('#mpEncoder').value;
+    opts.ShellcodeCompress = $('#mpScCompress').checked;
+    if ($('#mpOs').value === 'windows') {
+      opts.ShellcodeEntropy = parseInt($('#mpScEntropy').value, 10) || 1;
+      opts.ShellcodeExitOpt = parseInt($('#mpScExit').value, 10) || 1;
+      opts.ShellcodeBypass = parseInt($('#mpScBypass').value, 10) || 3;
+      opts.ShellcodeHeaders = parseInt($('#mpScHeaders').value, 10) || 1;
+      opts.ShellcodeThread = $('#mpScThread').checked;
+      opts.ShellcodeUnicode = $('#mpScUnicode').checked;
+      opts.ShellcodeOEP = parseInt($('#mpScOEP').value, 10) || 0;
+    }
+  }
+  msg.className = 'muted mono'; msg.textContent = 'saving…';
+  $('#mpSave').disabled = true;
+  try {
+    await api('POST', '/api/profiles', opts);
+    msg.className = 'ok'; msg.textContent = `saved profile "${name}"`;
+    const p = ensurePane('profiles'); if (p) loadProfiles(p);
+    setTimeout(closeModal, 900);
+  } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
+  finally { $('#mpSave').disabled = false; }
 };
 
 // =====================================================================

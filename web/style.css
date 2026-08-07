@@ -86,6 +86,17 @@ input::placeholder, textarea::placeholder { color: var(--ink-faint); }
 .field { display: block; margin-bottom: 10px; }
 .field > .lbl { display: block; font-size: 11.5px; color: var(--ink-dim); margin-bottom: 3px; }
 .field input, .field select, .field textarea { width: 100%; }
+/* Checkbox option groups (the profile dialog's build options). Not .field:
+   the control precedes its label here and must stay its natural size, whereas
+   .field stretches every input to 100%. */
+.opt-group { border: 1px solid var(--line); border-radius: 4px; padding: 9px 10px; margin-bottom: 10px; }
+.opt-group > .lbl { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-dim); margin-bottom: 8px; }
+.opt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.opt { display: flex; align-items: flex-start; gap: 7px; font-size: 12.5px; cursor: pointer; }
+.opt input[type=checkbox] { width: auto; flex: none; margin: 2px 0 0; cursor: pointer; }
+.opt .hint { display: block; color: var(--ink-dim); font-size: 11px; line-height: 1.35; }
+.opt-note { color: var(--ink-dim); font-size: 11px; line-height: 1.4; margin: 0 0 8px; }
+
 .hostport { display: flex; gap: 8px; }
 .hostport select, .hostport input.combo { flex: 1; min-width: 0; }
 .hostport input.narrow { width: 110px; flex: none; }
