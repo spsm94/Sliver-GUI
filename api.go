@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bishopfox/sliver/protobuf/clientpb"
 	"github.com/bishopfox/sliver/protobuf/sliverpb"
 	"google.golang.org/protobuf/proto"
 	"sync"
@@ -326,9 +325,11 @@ func hGetStageListeners(w http.ResponseWriter, r *http.Request) {
 
 func hStartStageListener(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		URL         string `json:"url"`
-		Profile     string `json:"profile"`
-		PrependSize bool   `json:"prependSize"`
+		URL     string `json:"url"`
+		Profile string `json:"profile"`
+		// Pointer so an omitted field is distinguishable from an explicit
+		// false: omitted means "use whatever the profile was saved with".
+		PrependSize *bool `json:"prependSize"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err, 400)
@@ -342,8 +343,15 @@ func hStartStageListener(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fmt.Errorf("profile required"), 400)
 		return
 	}
+	// Fall back to the setting saved with the profile. Prepend-size has to match
+	// the stager or the stage never runs, so defaulting it off for a profile
+	// built for msfvenom would break the payload silently.
+	prependSize := getProfileOpts(in.Profile).PrependSize
+	if in.PrependSize != nil {
+		prependSize = *in.PrependSize
+	}
 	cmd := fmt.Sprintf("stage-listener --url %s --profile %s", in.URL, in.Profile)
-	if in.PrependSize {
+	if prependSize {
 		cmd += " --prepend-size"
 	}
 	_, err := runSliverConsole("", cmd)
@@ -893,10 +901,18 @@ func hProfiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err, 502)
 		return
 	}
-	if list == nil {
-		list = []*clientpb.ImplantProfile{}
+	// Merge in the settings the bridge keeps itself (see profile_opts.go), so
+	// the UI sees one profile object rather than having to join two sources.
+	stored := loadProfileOpts()
+	out := make([]map[string]any, 0, len(list))
+	for _, p := range list {
+		out = append(out, map[string]any{
+			"Name":        p.Name,
+			"Config":      p.Config,
+			"PrependSize": stored[p.Name].PrependSize,
+		})
 	}
-	writeJSON(w, list)
+	writeJSON(w, out)
 }
 
 func hSaveProfile(w http.ResponseWriter, r *http.Request) {
@@ -928,7 +944,16 @@ func hSaveProfile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err, errStatus(err))
 		return
 	}
-	writeJSON(w, profile)
+	// Best-effort: the profile itself is saved on the server, and failing to
+	// record the bridge-side framing setting must not report the save as failed.
+	if err := setProfileOpts(name, ProfileOpts{PrependSize: opts.PrependSize}); err != nil {
+		log.Printf("profile %q saved, but recording prepend-size failed: %v", name, err)
+	}
+	writeJSON(w, map[string]any{
+		"Name":        profile.Name,
+		"Config":      profile.Config,
+		"PrependSize": opts.PrependSize,
+	})
 }
 
 // hShellcodeEncoders lists the shellcode encoders the server offers, keyed by
@@ -944,9 +969,15 @@ func hShellcodeEncoders(w http.ResponseWriter, r *http.Request) {
 }
 
 func hDeleteProfile(w http.ResponseWriter, r *http.Request) {
-	if err := sliver.DeleteProfile(r.PathValue("name")); err != nil {
+	name := r.PathValue("name")
+	if err := sliver.DeleteProfile(name); err != nil {
 		writeErr(w, err, 502)
 		return
+	}
+	// Drop the bridge-side settings too, so a profile recreated under the same
+	// name doesn't silently inherit the old one's framing.
+	if err := deleteProfileOpts(name); err != nil {
+		log.Printf("profile %q deleted, but clearing its prepend-size failed: %v", name, err)
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }

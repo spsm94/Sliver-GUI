@@ -1663,6 +1663,7 @@ function initStageListenersPane(pane) {
       setTimeout(() => { msg.textContent = ''; loadStageListeners(pane); }, 800);
     } catch (e) { msg.className = 'err'; msg.textContent = e.message; }
   };
+  elIn(pane, 'sl-profile').addEventListener('change', () => syncStagePrependSize(pane));
   refreshStageProfiles(pane);
 }
 async function loadStageListeners(pane) {
@@ -1689,8 +1690,23 @@ async function refreshStageProfiles(pane) {
     const profiles = await api('GET', '/api/profiles');
     sel.innerHTML = '';
     if (!profiles || !profiles.length) sel.appendChild(new Option('— no profiles —', ''));
-    else for (const p of profiles) sel.appendChild(new Option(p.Name, p.Name));
+    else for (const p of profiles) {
+      const opt = new Option(p.Name, p.Name);
+      // Carried so selecting a profile can tick the framing it was saved with —
+      // prepend-size has to match the stager or the stage never runs.
+      opt.dataset.prependSize = p.PrependSize ? '1' : '';
+      sel.appendChild(opt);
+    }
+    syncStagePrependSize(pane);
   } catch { sel.innerHTML = ''; sel.appendChild(new Option('— error loading profiles —', '')); }
+}
+// Mirror the selected profile's saved prepend-size onto the checkbox. The
+// operator can still override it for this one listener; the box is the value
+// that gets sent, so what they see is what runs.
+function syncStagePrependSize(pane) {
+  const sel = elIn(pane, 'sl-profile');
+  const opt = sel.selectedOptions[0];
+  elIn(pane, 'sl-prepend-size').checked = !!(opt && opt.dataset.prependSize);
 }
 
 // ----- Profiles (Payloads > Implant Profiles) -----
@@ -1704,8 +1720,11 @@ function fmtC2(cfg) {
 // settings are listed, so the column stays empty for a plain profile instead of
 // repeating the same six "off"s on every row.
 const SHELLCODE_ENCODER_NAME = { 1: 'shikata_ga_nai', 2: 'xor', 3: 'xor_dynamic' };
-function fmtProfileOpts(cfg) {
+function fmtProfileOpts(cfg, p) {
   const on = [];
+  // Bridge-side, not part of ImplantConfig — listed first because it decides
+  // whether a staged payload runs at all.
+  if (p && p.PrependSize) on.push('prepend-size');
   if (cfg.Debug) on.push('debug');
   if (cfg.Evasion) on.push('evasion');
   if (cfg.ObfuscateSymbols) on.push('obfuscated');
@@ -1741,7 +1760,7 @@ async function loadProfiles(pane) {
           `<td class="mono">${esc(p.Name)}</td><td>${esc(cfg.GOOS)}/${esc(cfg.GOARCH)}</td>` +
           `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
           `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td>` +
-          `<td class="mono muted" style="font-size:11.5px">${esc(fmtProfileOpts(cfg))}</td><td></td>`;
+          `<td class="mono muted" style="font-size:11.5px">${esc(fmtProfileOpts(cfg, p))}</td><td></td>`;
         const rm = el('button', 'btn danger sm', 'delete');
         rm.onclick = async () => {
           if (!confirm(`Delete profile "${p.Name}"?`)) return;
@@ -2144,6 +2163,7 @@ function openProfileModal() {
   $('#mpMsg').textContent = '';
   $('#mpWarn').style.display = 'none';
   $('#mpName').value = '';
+  $('#mpPrependSize').checked = false;
   fillDatalist($('#mp-c2-host-list'), { v4only: true });
   if (!$('#mpC2Host').value) $('#mpC2Host').value = preferredV4();
   updateProfileTargetFields();
@@ -2180,6 +2200,9 @@ $('#mpSave').onclick = async () => {
     NetGo: $('#mpNetGo').checked,
     RunAtLoad: format === 'shared' && $('#mpRunAtLoad').checked,
     LimitDomainJoined: $('#mpLimitDomain').checked,
+    // Not an ImplantConfig field — the bridge stores it against the profile
+    // name and applies it when a stage listener serves this profile.
+    PrependSize: $('#mpPrependSize').checked,
     LimitHostname: $('#mpLimitHost').value.trim(),
     LimitUsername: $('#mpLimitUser').value.trim(),
     LimitFileExists: $('#mpLimitFile').value.trim(),

@@ -707,6 +707,17 @@
         </div>
       </div>
 
+      <div class="opt-group">
+        <span class="lbl">Staging</span>
+        <p class="opt-note">Applied when a stage listener serves this profile. Sliver stores this on the
+          listener rather than the implant, so the bridge remembers it per profile and fills it in for you.</p>
+        <div class="opt-grid">
+          <label class="opt"><input type="checkbox" id="mpPrependSize"><span>Prepend size<span class="hint">Required
+            by Metasploit <span class="mono">custom/*</span> payloads (<span class="mono">msfvenom</span>,
+            <span class="mono">msfconsole</span>) &mdash; they read a 4-byte length before the stage</span></span></label>
+        </div>
+      </div>
+
       <div class="opt-group" id="mpShellcodeGroup" style="display:none">
         <span class="lbl">Shellcode options</span>
         <p class="opt-note" id="mpShellcodeNote"></p>

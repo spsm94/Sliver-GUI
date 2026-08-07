@@ -770,6 +770,11 @@ type GenerateOptions struct {
 	RunAtLoad        bool // --run-at-load (shared library only)
 	NetGo            bool // --netgo
 
+	// PrependSize is NOT part of ImplantConfig — it is a GenerateStageReq field,
+	// applied when a stage listener serves this profile. buildImplantConfig
+	// ignores it; the bridge persists it per profile name (profile_opts.go).
+	PrependSize bool // stage-listener --prepend-size
+
 	// Execution limits — the implant exits immediately unless the host matches.
 	LimitDomainJoined bool   // --limit-domainjoined
 	LimitHostname     string // --limit-hostname
