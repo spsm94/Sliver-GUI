@@ -2422,19 +2422,37 @@ loadAgents();
 setInterval(loadAgents, 5000);
 startEvents();
 
-// Restore active tab on page load
-setTimeout(() => {
+// Save/restore active tab
+function restoreActiveTab() {
   const savedTab = localStorage.getItem('lastTab');
-  if (savedTab) {
-    // Utility tabs (profiles, implants, jobs, etc)
-    if (['log', 'jobs', 'stagelisteners', 'profiles', 'implants', 'pivotgraph', 'help', 'console'].includes(savedTab)) {
-      openUtilTab(savedTab);
-    }
+  if (!savedTab) return;
+  // Utility tabs (profiles, implants, jobs, etc)
+  if (['log', 'jobs', 'stagelisteners', 'profiles', 'implants', 'pivotgraph', 'help', 'console'].includes(savedTab)) {
+    openUtilTab(savedTab);
+  } else if (STATE.agents[savedTab]) {
+    // Agent tab — restore if the agent is still connected
+    const rec = STATE.agents[savedTab];
+    showAgentPane(savedTab, rec.a);
   }
-}, 500);
-
-// Save active tab on change
+}
+function saveActiveTab() {
+  const activeTab = dockTabs.querySelector('.dtab.active');
+  if (activeTab && activeTab.dataset.tab) {
+    localStorage.setItem('lastTab', activeTab.dataset.tab);
+  }
+}
 dockTabs.addEventListener('click', (e) => {
   const tab = e.target.closest('.dtab');
-  if (tab && tab.dataset.tab) localStorage.setItem('lastTab', tab.dataset.tab);
+  if (tab) setTimeout(saveActiveTab, 0);
 });
+
+// Restore tab after agents load (they may be recreated)
+const originalLoadAgents = loadAgents;
+window.loadAgents = async function() {
+  const result = await originalLoadAgents.call(this);
+  setTimeout(restoreActiveTab, 100);
+  return result;
+};
+
+// Restore on boot
+setTimeout(restoreActiveTab, 800);
