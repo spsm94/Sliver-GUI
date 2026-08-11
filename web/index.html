@@ -69,14 +69,26 @@
 
   <!-- toolbar -->
   <div class="toolbar">
+    <div class="segmented">
+      <button id="btnGraph">Graph</button>
+      <button id="btnTable" class="active">Table</button>
+    </div>
     <input class="search mono" id="target-filter" placeholder="filter targets&hellip;" autocomplete="off">
     <div class="spacer"></div>
     <button class="btn ghost" id="tbListener">+ listener</button>
     <button class="btn emerald" id="tbGenerate">+ payload</button>
   </div>
 
-  <!-- stage: table and resizable console dock -->
+  <!-- stage: target graph/table, then the resizable console dock -->
   <div class="stage">
+    <div class="stagepanel hidden" id="graphPanel">
+      <svg class="graphwrap" id="graphSvg" viewBox="0 0 900 340" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="glegend">
+        <span class="item"><span class="sw" style="border-color:var(--ok)"></span>egress (direct)</span>
+        <span class="item"><span class="sw" style="border-color:var(--gold);border-top-style:solid"></span>pivoted</span>
+        <span class="item"><span class="sw" style="border-color:var(--dead)"></span>dead</span>
+      </div>
+    </div>
     <div class="stagepanel tblwrap" id="tablePanel">
       <table class="tgt">
         <thead><tr><th></th><th>name</th><th>host</th><th>user</th><th>transport</th><th>pid</th><th>arch</th><th>last</th><th>sleep</th></tr></thead>
