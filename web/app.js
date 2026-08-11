@@ -509,7 +509,7 @@ function saveCustomLinks() { try { localStorage.setItem('sliver.customLinks', JS
 function linkEndpointExists(id) { return id === ROOT_ID || !!STATE.agents[id] || !!CUSTOM_NODES[id]; }
 
 const LINKING = { from: null, tempLine: null };
-function updateLinkingCursor(on) { $('#graphPanel').classList.toggle('linking', on); }
+function updateLinkingCursor(on) { const p = $('#graphPanel'); if (p) p.classList.toggle('linking', on); }
 function cancelLinking() {
   LINKING.from = null;
   if (LINKING.tempLine) { LINKING.tempLine.remove(); LINKING.tempLine = null; }
@@ -551,22 +551,7 @@ function showLinkMenu(id, x, y) {
   }));
   placeMenu(x, y);
 }
-// A dashed preview line follows the cursor from the origin node while linking
-// is in progress; wired once (the SVG element itself persists across
-// re-renders — only its children get replaced).
-$('#graphSvg').addEventListener('mousemove', (e) => {
-  const svg = $('#graphSvg');
-  if (!LINKING.from) { if (LINKING.tempLine) { LINKING.tempLine.remove(); LINKING.tempLine = null; } return; }
-  const from = GRAPH.positions[LINKING.from];
-  if (!from) return;
-  const pt = svgPoint(svg, e);
-  if (!LINKING.tempLine) { LINKING.tempLine = svgEl('line', { class: 'edge linking-preview' }); svg.appendChild(LINKING.tempLine); }
-  LINKING.tempLine.setAttribute('x1', from.x); LINKING.tempLine.setAttribute('y1', from.y);
-  LINKING.tempLine.setAttribute('x2', pt.x); LINKING.tempLine.setAttribute('y2', pt.y);
-});
-$('#graphPanel').addEventListener('click', (e) => {
-  if (LINKING.from && !e.target.closest('.gnode')) cancelLinking();
-});
+// Graph removed
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && LINKING.from) cancelLinking(); });
 function showCanvasMenu(svg, x, y) {
   if (LINKING.from) { cancelLinking(); return; }
@@ -671,7 +656,8 @@ async function renderGraph() {
     svg.appendChild(g);
   }
 }
-$('#graphPanel').addEventListener('contextmenu', (e) => {
+const gp = $('#graphPanel');
+if (gp) gp.addEventListener('contextmenu', (e) => {
   if (e.target.closest('.gnode')) return;
   e.preventDefault();
   showCanvasMenu($('#graphSvg'), e.clientX, e.clientY);
