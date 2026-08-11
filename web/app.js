@@ -298,8 +298,7 @@ function renderChips() {
 
 function renderTable() {
   const tbody = $('#tblBody');
-  const ids = STATE.order.filter(matchesFilter)
-    .slice().sort((x, y) => (STATE.agents[y].a.LastCheckin || 0) - (STATE.agents[x].a.LastCheckin || 0));
+  const ids = STATE.order.filter(matchesFilter);
   if (!ids.length) {
     tbody.innerHTML = `<tr><td colspan="9" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
     return;
@@ -1122,7 +1121,8 @@ function openAgentConsole(id, subtab) {
   if (!pane) {
     pane = buildAgentPanel(id, rec);
     dockBody.appendChild(pane);
-    addTab(id, agentName(rec.a), rec.kind === 'beacon' ? 'var(--priv-med)' : (rec.kind === 'dead' ? 'var(--dead)' : 'var(--ok)'), true);
+    const tabLabel = `${agentName(rec.a)}\\${rec.a.Username || '?'}`;
+    addTab(id, tabLabel, rec.kind === 'beacon' ? 'var(--priv-med)' : (rec.kind === 'dead' ? 'var(--dead)' : 'var(--ok)'), true);
   }
   activateTab(id);
   switchSubtab(pane, id, subtab || (rec.kind === 'dead' ? 'info' : 'terminal'));
