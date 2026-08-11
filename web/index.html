@@ -606,6 +606,10 @@
   <div class="modal-box" id="modalGenerate" style="display:none">
     <div class="modal-head">Generate Payload</div>
     <div class="modal-body form" style="max-height:60vh">
+      <label class="field" style="margin:0"><span class="lbl">Profile (optional — pre-fills form)</span>
+        <select id="mgProfile"></select>
+      </label>
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
       <label class="field" style="margin:0"><span class="lbl">Listener</span>
         <select id="mgListener"></select>
       </label>
@@ -635,6 +639,69 @@
         <div class="grid2">
           <label class="field" style="margin:0"><span class="lbl">Sleep (s)</span><input id="mgInterval" type="number" min="1" value="60"></label>
           <label class="field" style="margin:0"><span class="lbl">Jitter (s)</span><input id="mgJitter" type="number" min="0" value="30"></label>
+        </div>
+        <div class="grid2" style="margin-top:8px">
+          <label class="field" style="margin:0"><span class="lbl">Reconnect (s)</span><input id="mgReconnect" type="number" min="1" value="60"></label>
+          <label class="field" style="margin:0"><span class="lbl">Max connection errors</span><input id="mgMaxErrors" type="number" min="1" value="1000"></label>
+          <label class="field" style="margin:0"><span class="lbl">Poll timeout (s)</span><input id="mgPoll" type="number" min="1" value="360"></label>
+        </div>
+      </div>
+      <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">
+      <div class="opt-group">
+        <span class="lbl">Build options</span>
+        <div class="opt-grid">
+          <label class="opt"><input type="checkbox" id="mgDebug"><span>Debug build<span class="hint">verbose implant logging</span></span></label>
+          <label class="opt"><input type="checkbox" id="mgEvasion"><span>Evasion<span class="hint">unhook user-space API hooks</span></span></label>
+          <label class="opt"><input type="checkbox" id="mgObfuscate"><span>Obfuscate symbols<span class="hint">Sliver's CLI default &mdash; but builds take far longer</span></span></label>
+          <label class="opt"><input type="checkbox" id="mgNetGo"><span>Force netgo<span class="hint">pure-Go resolver, no libc</span></span></label>
+          <label class="opt" id="mgRunAtLoadOpt"><input type="checkbox" id="mgRunAtLoad"><span>Run at load<span class="hint">entrypoint from DllMain/constructor</span></span></label>
+          <label class="opt"><input type="checkbox" id="mgLimitDomain"><span>Domain-joined only<span class="hint">exit unless the host is domain-joined</span></span></label>
+        </div>
+      </div>
+
+      <div class="opt-group">
+        <span class="lbl">Staging</span>
+        <p class="opt-note">Applied when a stage listener serves this payload.</p>
+        <div class="opt-grid">
+          <label class="opt"><input type="checkbox" id="mgPrependSize"><span>Prepend size<span class="hint">Required by Metasploit <span class="mono">custom/*</span> payloads</span></span></label>
+        </div>
+      </div>
+
+      <div class="opt-group" id="mgShellcodeGroup" style="display:none">
+        <span class="lbl">Shellcode options</span>
+        <p class="opt-note" id="mgShellcodeNote"></p>
+        <label class="field"><span class="lbl">Encoder</span><select id="mgEncoder"><option value="none">none</option></select></label>
+        <div class="opt-grid" style="margin-bottom:10px">
+          <label class="opt"><input type="checkbox" id="mgScCompress"><span>Compress (aPLib)</span></label>
+          <label class="opt mg-win"><input type="checkbox" id="mgScThread"><span>Run EXE entrypoint as a thread</span></label>
+          <label class="opt mg-win"><input type="checkbox" id="mgScUnicode"><span>Unicode DLL command line</span></label>
+        </div>
+        <div class="grid2 mg-win">
+          <label class="field" style="margin:0"><span class="lbl">Entropy</span>
+            <select id="mgScEntropy"><option value="1">1 &mdash; none</option><option value="2">2 &mdash; random names</option><option value="3">3 &mdash; random + encrypt</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">Exit option</span>
+            <select id="mgScExit"><option value="1">1 &mdash; exit thread</option><option value="2">2 &mdash; exit process</option><option value="3">3 &mdash; block</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">AMSI/WLDP bypass</span>
+            <select id="mgScBypass"><option value="1">1 &mdash; none</option><option value="2">2 &mdash; abort on failure</option><option value="3">3 &mdash; continue on failure</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">Headers</span>
+            <select id="mgScHeaders"><option value="1">1 &mdash; overwrite</option><option value="2">2 &mdash; keep</option></select>
+          </label>
+          <label class="field" style="margin:0"><span class="lbl">Entry point override (0 = default)</span><input id="mgScOEP" type="number" min="0" value="0"></label>
+        </div>
+      </div>
+
+      <div class="opt-group">
+        <span class="lbl">Execution limits (optional)</span>
+        <p class="opt-note">The implant exits immediately unless the host matches every limit set here.</p>
+        <div class="grid2">
+          <label class="field" style="margin:0"><span class="lbl">Hostname</span><input id="mgLimitHost" class="mono" placeholder="WKSTN-01"></label>
+          <label class="field" style="margin:0"><span class="lbl">Username</span><input id="mgLimitUser" class="mono" placeholder="jdoe"></label>
+          <label class="field" style="margin:0"><span class="lbl">File exists</span><input id="mgLimitFile" class="mono" placeholder="C:\\Windows\\System32\\notepad.exe"></label>
+          <label class="field" style="margin:0"><span class="lbl">Locale</span><input id="mgLimitLocale" class="mono" placeholder="en-US"></label>
+          <label class="field" style="margin:0"><span class="lbl">Not after (datetime)</span><input id="mgLimitDate" class="mono" placeholder="2026-12-31 23:59:59"></label>
         </div>
       </div>
       <hr style="width:100%;border:0;border-top:1px solid var(--line);margin:2px 0">

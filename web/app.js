@@ -1863,7 +1863,7 @@ function openModal(which) {
   modals[which].style.display = 'flex';
   modals[which].style.flexDirection = 'column';
   veil.style.display = 'flex';
-  if (which === 'generate') refreshGenListenerList();
+  if (which === 'generate') { refreshGenListenerList(); refreshGenProfileList(); }
 }
 function closeModal() { veil.style.display = 'none'; }
 veil.addEventListener('click', (e) => { if (e.target === veil) closeModal(); });
@@ -2004,10 +2004,29 @@ function updateGenTargetFields() {
     formats = formats.filter(([v]) => v !== 'shellcode');
   }
   setSelectOptions($('#mgFormat'), formats);
+  updateGenFormatFields();
+  refreshEncoderOptions();
+}
+function updateGenFormatFields() {
+  const os = $('#mgOs').value, format = $('#mgFormat').value;
+  const isShellcode = format === 'shellcode';
+  $('#mgShellcodeGroup').style.display = isShellcode ? '' : 'none';
+  $('#mgRunAtLoadOpt').style.display = format === 'shared' ? '' : 'none';
+  const winOnly = isShellcode && os === 'windows';
+  $$('.mg-win', document).forEach((n) => n.style.display = winOnly ? '' : 'none');
+  $('#mgShellcodeNote').textContent = winOnly
+    ? 'Windows shellcode is generated with Donut; all options below apply.'
+    : `${os} shellcode only supports compression — the Donut-specific options do not apply.`;
+}
+function updateGenTypeFields() {
+  $('#mgBeaconSection').style.display = $('#mgType').value === 'beacon' ? '' : 'none';
 }
 $('#mgOs').addEventListener('change', updateGenTargetFields);
 $('#mgArch').addEventListener('change', updateGenTargetFields);
+$('#mgFormat').addEventListener('change', updateGenFormatFields);
+$('#mgType').addEventListener('change', updateGenTypeFields);
 updateGenTargetFields();
+updateGenTypeFields();
 async function refreshGenListenerList() {
   const sel = $('#mgListener');
   const prev = sel.value;
@@ -2077,13 +2096,42 @@ $('#mgSave').onclick = async () => {
   if (type !== 'named-pipe' && !c2.C2Port) { msg.className = 'err'; msg.textContent = 'specify a C2 port'; return; }
   const savedir = $('#mgSavedir').value.trim();
   if (!savedir) { msg.className = 'err'; msg.textContent = 'specify a save directory'; return; }
+  const isBeacon = $('#mgType').value === 'beacon';
   const opts = {
     OS: $('#mgOs').value, Arch: $('#mgArch').value, Format: format,
-    IsBeacon: $('#mgType').value === 'beacon',
+    IsBeacon: isBeacon,
     Interval: parseInt($('#mgInterval').value, 10) || 60, Jitter: parseInt($('#mgJitter').value, 10) || 0,
+    Reconnect: parseInt($('#mgReconnect').value, 10) || 60, MaxErrors: parseInt($('#mgMaxErrors').value, 10) || 1000,
+    Poll: parseInt($('#mgPoll').value, 10) || 360,
     Name: $('#mgName').value.trim(), SaveDir: savedir,
+    Debug: $('#mgDebug').checked,
+    Evasion: $('#mgEvasion').checked,
+    ObfuscateSymbols: $('#mgObfuscate').checked,
+    NetGo: $('#mgNetGo').checked,
+    RunAtLoad: format === 'shared' && $('#mgRunAtLoad').checked,
+    LimitDomainJoined: $('#mgLimitDomain').checked,
+    PrependSize: $('#mgPrependSize').checked,
+    LimitHostname: $('#mgLimitHost').value.trim(),
+    LimitUsername: $('#mgLimitUser').value.trim(),
+    LimitFileExists: $('#mgLimitFile').value.trim(),
+    LimitLocale: $('#mgLimitLocale').value.trim(),
+    LimitDatetime: $('#mgLimitDate').value.trim(),
     ...c2,
   };
+  // Shellcode options (only for shellcode format)
+  if (format === 'shellcode') {
+    opts.ShellcodeEncoder = $('#mgEncoder').value;
+    opts.ShellcodeCompress = $('#mgScCompress').checked;
+    if ($('#mgOs').value === 'windows') {
+      opts.ShellcodeEntropy = parseInt($('#mgScEntropy').value, 10) || 1;
+      opts.ShellcodeExitOpt = parseInt($('#mgScExit').value, 10) || 1;
+      opts.ShellcodeBypass = parseInt($('#mgScBypass').value, 10) || 3;
+      opts.ShellcodeHeaders = parseInt($('#mgScHeaders').value, 10) || 1;
+      opts.ShellcodeThread = $('#mgScThread').checked;
+      opts.ShellcodeUnicode = $('#mgScUnicode').checked;
+      opts.ShellcodeOEP = parseInt($('#mgScOEP').value, 10) || 0;
+    }
+  }
   msg.className = 'muted mono'; msg.textContent = 'building… (this can take a minute or two)';
   $('#mgSave').disabled = true;
   try {
@@ -2236,6 +2284,94 @@ $('#mpSave').onclick = async () => {
   finally { $('#mpSave').disabled = false; }
 };
 
+// ----- Profile selector in Generate modal -----
+async function refreshGenProfileList() {
+  const sel = $('#mgProfile');
+  sel.innerHTML = '<option value="">— no profile —</option>';
+  try {
+    const profiles = await api('GET', '/api/profiles');
+    for (const p of (profiles || [])) {
+      sel.appendChild(new Option(p.Name, p.Name));
+    }
+  } catch (e) {
+    // non-fatal; profiles are optional
+  }
+}
+$('#mgProfile').addEventListener('change', async () => {
+  const name = $('#mgProfile').value.trim();
+  if (!name) return;
+  try {
+    const profiles = await api('GET', '/api/profiles');
+    const prof = (profiles || []).find((p) => p.Name === name);
+    if (!prof) return;
+    const cfg = prof.Config || {};
+    // Pre-fill form from profile
+    $('#mgOs').value = cfg.GOOS || 'windows';
+    $('#mgArch').value = cfg.GOARCH || 'amd64';
+    let fmt = 'exe';
+    if (cfg.IsShellcode) fmt = 'shellcode';
+    else if (cfg.Format === 3) fmt = 'shared';
+    else if (cfg.Format === 4) fmt = 'service';
+    $('#mgFormat').value = fmt;
+    const isBeacon = cfg.BeaconInterval > 0;
+    $('#mgType').value = isBeacon ? 'beacon' : 'session';
+    updateGenTargetFields();
+    if (isBeacon) {
+      $('#mgInterval').value = Math.round(cfg.BeaconInterval / 1e9) || 60;
+      $('#mgJitter').value = Math.round(cfg.BeaconJitter / 1e9) || 0;
+      $('#mgReconnect').value = Math.round(cfg.ReconnectInterval / 1e9) || 60;
+      $('#mgMaxErrors').value = cfg.MaxConnectionErrors || 1000;
+      $('#mgPoll').value = Math.round(cfg.PollTimeout / 1e9) || 360;
+    }
+    // Build options
+    $('#mgDebug').checked = cfg.Debug || false;
+    $('#mgEvasion').checked = cfg.Evasion || false;
+    $('#mgObfuscate').checked = cfg.ObfuscateSymbols || false;
+    $('#mgNetGo').checked = cfg.NetGoEnabled || false;
+    $('#mgRunAtLoad').checked = cfg.RunAtLoad || false;
+    $('#mgLimitDomain').checked = cfg.LimitDomainJoined || false;
+    // Staging
+    $('#mgPrependSize').checked = (prof.PrependSize || false);
+    // Execution limits
+    $('#mgLimitHost').value = cfg.LimitHostname || '';
+    $('#mgLimitUser').value = cfg.LimitUsername || '';
+    $('#mgLimitFile').value = cfg.LimitFileExists || '';
+    $('#mgLimitLocale').value = cfg.LimitLocale || '';
+    $('#mgLimitDate').value = cfg.LimitDatetime || '';
+    // Shellcode options
+    if (fmt === 'shellcode') {
+      $('#mgEncoder').value = cfg.ShellcodeEncoder || 'none';
+      const sc = cfg.ShellcodeConfig || {};
+      $('#mgScCompress').checked = sc.Compress === 2;
+      $('#mgScEntropy').value = sc.Entropy || 1;
+      $('#mgScExit').value = sc.ExitOpt || 1;
+      $('#mgScBypass').value = sc.Bypass || 3;
+      $('#mgScHeaders').value = sc.Headers || 1;
+      $('#mgScThread').checked = cfg.ShellcodeThread || false;
+      $('#mgScUnicode').checked = cfg.ShellcodeUnicode || false;
+      $('#mgScOEP').value = cfg.ShellcodeOEP || 0;
+    }
+    // C2 setup
+    const c2s = cfg.C2 || [];
+    if (c2s.length > 0) {
+      const c2url = new URL(c2s[0].URL);
+      if (c2url.protocol.startsWith('namedpipe')) {
+        const host = c2url.hostname;
+        const path = c2url.pathname.replace(/\//g, '\\');
+        $('#mgPipe').value = '\\\\' + host + path;
+        $('#mgListener').value = '__namedpipe__';
+      } else {
+        $('#mgHost').value = c2url.hostname;
+        $('#mgPort').value = c2url.port || 8888;
+      }
+    }
+    updateGenListenerFields();
+    updateGenTypeFields();
+  } catch (e) {
+    // Profile selection is best-effort
+  }
+});
+
 // =====================================================================
 // directory browser (bridge host filesystem — Generate's save dir)
 // =====================================================================
@@ -2285,3 +2421,16 @@ loadInterfaces();
 loadAgents();
 setInterval(loadAgents, 5000);
 startEvents();
+
+// Restore active tab on page load
+const savedTab = localStorage.getItem('lastTab');
+if (savedTab) {
+  const btn = Array.from(document.querySelectorAll('.subtab, [data-tab]')).find((b) => b.dataset.tab === savedTab || b.textContent.trim().toLowerCase() === savedTab);
+  if (btn) btn.click();
+}
+
+// Save active tab on change
+document.addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-tab]') || e.target.closest('.subtab');
+  if (tab && tab.dataset.tab) localStorage.setItem('lastTab', tab.dataset.tab);
+});
