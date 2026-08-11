@@ -2423,14 +2423,18 @@ setInterval(loadAgents, 5000);
 startEvents();
 
 // Restore active tab on page load
-const savedTab = localStorage.getItem('lastTab');
-if (savedTab) {
-  const btn = Array.from(document.querySelectorAll('.subtab, [data-tab]')).find((b) => b.dataset.tab === savedTab || b.textContent.trim().toLowerCase() === savedTab);
-  if (btn) btn.click();
-}
+setTimeout(() => {
+  const savedTab = localStorage.getItem('lastTab');
+  if (savedTab) {
+    // Utility tabs (profiles, implants, jobs, etc)
+    if (['log', 'jobs', 'stagelisteners', 'profiles', 'implants', 'pivotgraph', 'help', 'console'].includes(savedTab)) {
+      openUtilTab(savedTab);
+    }
+  }
+}, 500);
 
 // Save active tab on change
-document.addEventListener('click', (e) => {
-  const tab = e.target.closest('[data-tab]') || e.target.closest('.subtab');
+dockTabs.addEventListener('click', (e) => {
+  const tab = e.target.closest('.dtab');
   if (tab && tab.dataset.tab) localStorage.setItem('lastTab', tab.dataset.tab);
 });
