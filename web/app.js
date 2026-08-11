@@ -182,8 +182,6 @@ document.addEventListener('click', closeMenus);
 $$('.ddown button', menubar).forEach((b) => {
   b.addEventListener('click', () => {
     const act = b.dataset.act;
-    if (act === 'view-table') $('#btnTable').click();
-    else if (act === 'view-graph') $('#btnGraph').click();
     else if (act === 'open-tab') openUtilTab(b.dataset.tab);
     else if (act === 'modal') {
       if (b.dataset.modal === 'listener') resetListenerModal();
@@ -197,11 +195,8 @@ $$('.ddown button', menubar).forEach((b) => {
 // =====================================================================
 // toolbar: graph/table toggle, target filter
 // =====================================================================
-const btnGraph = $('#btnGraph'), btnTable = $('#btnTable');
-const graphPanel = $('#graphPanel'), tablePanel = $('#tablePanel');
-btnGraph.onclick = () => { btnGraph.classList.add('active'); btnTable.classList.remove('active'); graphPanel.classList.remove('hidden'); tablePanel.classList.add('hidden'); };
-btnTable.onclick = () => { btnTable.classList.add('active'); btnGraph.classList.remove('active'); tablePanel.classList.remove('hidden'); graphPanel.classList.add('hidden'); };
-$('#target-filter').addEventListener('input', (e) => { STATE.filter = e.target.value.toLowerCase(); renderTable(); renderGraph(); });
+const tablePanel = $('#tablePanel');
+$('#target-filter').addEventListener('input', (e) => { STATE.filter = e.target.value.toLowerCase(); renderTable(); });
 function matchesFilter(id) {
   if (!STATE.filter) return true;
   const a = STATE.agents[id].a;
@@ -280,7 +275,6 @@ async function loadAgents() {
     STATE.agents = map; STATE.order = order;
     renderChips();
     renderTable();
-    await renderGraph();
     for (const id of Object.keys(STATE.panels)) {
       const pane = ensurePane(id);
       if (pane && $(`.subtab[data-sub="info"].active`, pane)) renderInfo(id, pane);
@@ -298,8 +292,7 @@ function renderChips() {
 
 function renderTable() {
   const tbody = $('#tblBody');
-  const ids = STATE.order.filter(matchesFilter)
-    .slice().sort((x, y) => (STATE.agents[y].a.LastCheckin || 0) - (STATE.agents[x].a.LastCheckin || 0));
+  const ids = STATE.order.filter(matchesFilter);
   if (!ids.length) {
     tbody.innerHTML = `<tr><td colspan="9" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
     return;
@@ -471,7 +464,6 @@ function addCustomNode(x, y) {
   const id = 'custom-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   CUSTOM_NODES[id] = { label: label.trim(), x, y };
   saveCustomNodes();
-  renderGraph();
 }
 function renameCustomNode(id) {
   const node = CUSTOM_NODES[id]; if (!node) return;
@@ -479,13 +471,11 @@ function renameCustomNode(id) {
   if (!name || !name.trim()) return;
   node.label = name.trim();
   saveCustomNodes();
-  renderGraph();
 }
 function deleteCustomNode(id) {
   if (!confirm('Delete this node?')) return;
   delete CUSTOM_NODES[id];
   saveCustomNodes();
-  renderGraph();
 }
 function showCustomNodeMenu(id, x, y) {
   if (LINKING.from) cancelLinking();
@@ -537,7 +527,6 @@ function completeLink(toId) {
   const id = 'link-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   CUSTOM_LINKS[id] = { from: fromId, to: toId, label: label.trim() };
   saveCustomLinks();
-  renderGraph();
 }
 function editLinkLabel(id) {
   const link = CUSTOM_LINKS[id]; if (!link) return;
@@ -545,13 +534,11 @@ function editLinkLabel(id) {
   if (label == null) return;
   link.label = label.trim();
   saveCustomLinks();
-  renderGraph();
 }
 function deleteLink(id) {
   if (!confirm('Delete this link?')) return;
   delete CUSTOM_LINKS[id];
   saveCustomLinks();
-  renderGraph();
 }
 function showLinkMenu(id, x, y) {
   if (LINKING.from) cancelLinking();
@@ -1136,7 +1123,8 @@ function openAgentConsole(id, subtab) {
   if (!pane) {
     pane = buildAgentPanel(id, rec);
     dockBody.appendChild(pane);
-    addTab(id, agentName(rec.a), rec.kind === 'beacon' ? 'var(--priv-med)' : (rec.kind === 'dead' ? 'var(--dead)' : 'var(--ok)'), true);
+    const tabLabel = `${agentName(rec.a)}\\${rec.a.Username || '?'}`;
+    addTab(id, tabLabel, rec.kind === 'beacon' ? 'var(--priv-med)' : (rec.kind === 'dead' ? 'var(--dead)' : 'var(--ok)'), true);
   }
   activateTab(id);
   switchSubtab(pane, id, subtab || (rec.kind === 'dead' ? 'info' : 'terminal'));
