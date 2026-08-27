@@ -1,4 +1,4 @@
-module sliver-web-gui
+module github.com/spsm94/Sliver-GUI
 
 go 1.26.2
 
