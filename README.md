@@ -1,10 +1,11 @@
 # Sliver Web GUI
 
+This is a personal project using claude code to create a GUI for sliver c2. I have never done frontend development so this is project is entirely AI created based off
+my prompts to make it look most like cobalt strike. This is a starting point and I encourage anyone wanting to use it to modify it as they see fit. Everything below
+is AI generated.
+
 A browser-based operator console for the [Sliver](https://github.com/BishopFox/sliver)
-C2 framework. The interface is modeled on the SHADOWFORGE teamserver console — a
-top time strip, a left sidebar that groups agents by kind, and a tabbed detail
-pane — restyled in a zinc dark theme with JetBrains Mono. You get a graphical
-operator workflow: a grouped agent list, per-agent interaction (terminal, file
+C2 framework. You get a graphical operator workflow: a grouped agent list, per-agent interaction (terminal, file
 browser, process list, network, screenshots, info), listener management, implant
 generation, pivoting and tunnelling (pivot listeners, SOCKS5), and a
 collapsible live event log.
