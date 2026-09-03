@@ -912,10 +912,18 @@ func hProfiles(w http.ResponseWriter, r *http.Request) {
 	stored := loadProfileOpts()
 	out := make([]map[string]any, 0, len(list))
 	for _, p := range list {
+		// Opts is the flat, edit-dialog-ready view of the profile (Config
+		// reversed into GenerateOptions, plus the bridge-side Name/PrependSize),
+		// so the frontend can pre-fill the form without re-deriving nanoseconds,
+		// C2 URLs and enum values itself.
+		opts := optionsFromConfig(p.Config)
+		opts.Name = p.Name
+		opts.PrependSize = stored[p.Name].PrependSize
 		out = append(out, map[string]any{
 			"Name":        p.Name,
 			"Config":      p.Config,
 			"PrependSize": stored[p.Name].PrependSize,
+			"Opts":        opts,
 		})
 	}
 	writeJSON(w, out)

@@ -1747,11 +1747,15 @@ async function loadProfiles(pane) {
           `<td>${esc(OUTPUT_FORMAT_NAME[cfg.Format] ?? cfg.Format)}</td><td>${cfg.IsBeacon ? 'beacon' : 'session'}</td>` +
           `<td class="mono" style="font-size:12px">${esc(fmtC2(cfg))}</td>` +
           `<td class="mono muted" style="font-size:11.5px">${esc(fmtProfileOpts(cfg, p))}</td><td></td>`;
+        const ed = el('button', 'btn sm', 'edit');
+        ed.style.marginRight = '6px';
+        ed.onclick = () => openProfileModal(p);
         const rm = el('button', 'btn danger sm', 'delete');
         rm.onclick = async () => {
           if (!confirm(`Delete profile "${p.Name}"?`)) return;
           try { await api('DELETE', '/api/profiles/' + encodeURIComponent(p.Name)); loadProfiles(pane); } catch (e) { alert(e.message); }
         };
+        tr.lastElementChild.appendChild(ed);
         tr.lastElementChild.appendChild(rm);
         body.appendChild(tr);
       }
@@ -2193,18 +2197,81 @@ $('#mpFormat').addEventListener('change', updateProfileFormatFields);
 $('#mpC2Type').addEventListener('change', updateProfileC2Fields);
 $('#mpType').addEventListener('change', updateProfileBeaconFields);
 
-function openProfileModal() {
+// openProfileModal opens the dialog to create a new profile, or — when passed a
+// profile object from the table — to edit it. Editing pre-fills the form from
+// the profile's Opts (the backend's reversed GenerateOptions) and locks the
+// name: Sliver upserts a profile by name, so saving under a new name would make
+// a second profile rather than rename this one.
+async function openProfileModal(profile) {
+  const editing = !!profile;
   $('#mpMsg').textContent = '';
   $('#mpWarn').style.display = 'none';
-  $('#mpName').value = '';
-  $('#mpPrependSize').checked = false;
+  $('#mpHead').textContent = editing ? `Edit Profile — ${profile.Name}` : 'New Implant Profile';
+  $('#mpSave').textContent = editing ? 'Save changes' : 'Save profile';
+  $('#mpName').readOnly = editing;
+  $('#mpName').value = editing ? profile.Name : '';
   fillDatalist($('#mp-c2-host-list'), { v4only: true });
-  if (!$('#mpC2Host').value) $('#mpC2Host').value = preferredV4();
-  updateProfileTargetFields();
-  updateProfileC2Fields();
-  updateProfileBeaconFields();
+  if (editing) {
+    await fillProfileForm(profile.Opts || {});
+  } else {
+    $('#mpPrependSize').checked = false;
+    if (!$('#mpC2Host').value) $('#mpC2Host').value = preferredV4();
+    updateProfileTargetFields();
+    updateProfileC2Fields();
+    updateProfileBeaconFields();
+  }
   openModal('profile');
-  $('#mpName').focus();
+  (editing ? $('#mpC2Host') : $('#mpName')).focus();
+}
+
+// fillProfileForm pre-populates every modal field from a profile's Opts. Order
+// matters: OS rebuilds the Arch/Format option lists and Arch rebuilds the
+// encoder list, so each parent select is applied before its dependents, and the
+// encoder options (fetched async) are awaited before the encoder value is set.
+async function fillProfileForm(o) {
+  $('#mpOs').value = o.OS || 'windows';
+  updateProfileTargetFields();          // rebuild Arch + Format options for the OS
+  if (o.Arch) $('#mpArch').value = o.Arch;
+  updateProfileTargetFields();          // re-filter Format now that Arch is set
+  if (o.Format) $('#mpFormat').value = o.Format;
+  updateProfileFormatFields();
+  await refreshEncoderOptions();        // populate encoder <option>s for the arch
+
+  $('#mpC2Type').value = o.C2Type || 'http';
+  updateProfileC2Fields();
+  if (o.C2Type === 'named-pipe') { $('#mpPipe').value = o.C2Host || ''; }
+  else { $('#mpC2Host').value = o.C2Host || ''; $('#mpC2Port').value = o.C2Port || ''; }
+
+  $('#mpType').value = o.IsBeacon ? 'beacon' : 'session';
+  updateProfileBeaconFields();
+  $('#mpInterval').value = o.Interval || 60;
+  $('#mpJitter').value = o.Jitter || 0;
+  $('#mpReconnect').value = o.Reconnect || 60;
+  $('#mpMaxErrors').value = o.MaxErrors || 1000;
+  $('#mpPoll').value = o.Poll || 360;
+
+  $('#mpDebug').checked = !!o.Debug;
+  $('#mpEvasion').checked = !!o.Evasion;
+  $('#mpObfuscate').checked = !!o.ObfuscateSymbols;
+  $('#mpNetGo').checked = !!o.NetGo;
+  $('#mpRunAtLoad').checked = !!o.RunAtLoad;
+  $('#mpLimitDomain').checked = !!o.LimitDomainJoined;
+  $('#mpPrependSize').checked = !!o.PrependSize;
+  $('#mpLimitHost').value = o.LimitHostname || '';
+  $('#mpLimitUser').value = o.LimitUsername || '';
+  $('#mpLimitFile').value = o.LimitFileExists || '';
+  $('#mpLimitLocale').value = o.LimitLocale || '';
+  $('#mpLimitDate').value = o.LimitDatetime || '';
+
+  $('#mpEncoder').value = o.ShellcodeEncoder || 'none';
+  $('#mpScCompress').checked = !!o.ShellcodeCompress;
+  $('#mpScThread').checked = !!o.ShellcodeThread;
+  $('#mpScUnicode').checked = !!o.ShellcodeUnicode;
+  $('#mpScEntropy').value = o.ShellcodeEntropy || 1;
+  $('#mpScExit').value = o.ShellcodeExitOpt || 1;
+  $('#mpScBypass').value = o.ShellcodeBypass || 3;
+  $('#mpScHeaders').value = o.ShellcodeHeaders || 1;
+  $('#mpScOEP').value = o.ShellcodeOEP || 0;
 }
 
 $('#mpSave').onclick = async () => {

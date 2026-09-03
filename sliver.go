@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -1001,6 +1002,96 @@ func clampU32(v, lo, hi, def uint32) uint32 {
 		return def
 	}
 	return v
+}
+
+// formatName is the inverse of outputFormat: the enum back to the string the
+// Generate/Profile forms use ("exe" for a plain executable).
+func formatName(f clientpb.OutputFormat) string {
+	switch f {
+	case clientpb.OutputFormat_SHARED_LIB:
+		return "shared"
+	case clientpb.OutputFormat_SHELLCODE:
+		return "shellcode"
+	case clientpb.OutputFormat_SERVICE:
+		return "service"
+	default:
+		return "exe"
+	}
+}
+
+// parseC2URL recovers the form's C2 type/host/port from a stored ImplantC2 URL
+// (e.g. "mtls://10.10.14.2:8888"), the inverse of the URL building in
+// buildImplantConfig. A named-pipe URL carries no host/port — its path is the
+// pipe the operator typed, so it is handed back in the host slot.
+func parseC2URL(raw string) (c2Type, host string, port uint32) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" {
+		return "http", raw, 0
+	}
+	switch u.Scheme {
+	case "namedpipe":
+		// namedPipeURL lower-cased and slash-normalised the pipe path; hand back
+		// the "//host/path" portion so the operator can recognise and tweak it.
+		return "named-pipe", strings.TrimPrefix(raw, "namedpipe:"), 0
+	case "mtls", "http", "https":
+		c2Type = u.Scheme
+	default:
+		c2Type = "http"
+	}
+	return c2Type, u.Hostname(), atoiU32(u.Port())
+}
+
+// optionsFromConfig is the inverse of buildImplantConfig: it recovers the flat
+// GenerateOptions from a saved profile's ImplantConfig so the edit dialog can
+// pre-fill its form with the profile's current settings. PrependSize and Name
+// are not derivable from ImplantConfig (PrependSize is a bridge-side setting,
+// see profile_opts.go); the caller fills those in.
+func optionsFromConfig(cfg *clientpb.ImplantConfig) GenerateOptions {
+	if cfg == nil {
+		return GenerateOptions{}
+	}
+	sec := int64(time.Second)
+	opts := GenerateOptions{
+		OS:        cfg.GOOS,
+		Arch:      cfg.GOARCH,
+		Format:    formatName(cfg.Format),
+		IsBeacon:  cfg.IsBeacon,
+		Interval:  cfg.BeaconInterval / sec,
+		Jitter:    cfg.BeaconJitter / sec,
+		Reconnect: cfg.ReconnectInterval / sec,
+		MaxErrors: int64(cfg.MaxConnectionErrors),
+		Poll:      cfg.PollTimeout / sec,
+
+		Debug:            cfg.Debug,
+		Evasion:          cfg.Evasion,
+		ObfuscateSymbols: cfg.ObfuscateSymbols,
+		RunAtLoad:        cfg.RunAtLoad,
+		NetGo:            cfg.NetGoEnabled,
+
+		LimitDomainJoined: cfg.LimitDomainJoined,
+		LimitHostname:     cfg.LimitHostname,
+		LimitUsername:     cfg.LimitUsername,
+		LimitDatetime:     cfg.LimitDatetime,
+		LimitFileExists:   cfg.LimitFileExists,
+		LimitLocale:       cfg.LimitLocale,
+
+		// The form's encoder <option> values are the server's lower-case names.
+		ShellcodeEncoder: strings.ToLower(cfg.ShellcodeEncoder.String()),
+	}
+	if len(cfg.C2) > 0 {
+		opts.C2Type, opts.C2Host, opts.C2Port = parseC2URL(cfg.C2[0].URL)
+	}
+	if sc := cfg.ShellcodeConfig; sc != nil {
+		opts.ShellcodeCompress = sc.Compress == 2 // 1=none, 2=aPLib
+		opts.ShellcodeEntropy = sc.Entropy
+		opts.ShellcodeExitOpt = sc.ExitOpt
+		opts.ShellcodeBypass = sc.Bypass
+		opts.ShellcodeHeaders = sc.Headers
+		opts.ShellcodeThread = sc.Thread
+		opts.ShellcodeUnicode = sc.Unicode
+		opts.ShellcodeOEP = sc.OEP
+	}
+	return opts
 }
 
 // ShellcodeEncoders reports the encoders the server can apply, keyed by the

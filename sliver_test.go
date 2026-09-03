@@ -129,3 +129,81 @@ func TestBuildImplantConfigSGNMirrorsEncoder(t *testing.T) {
 		t.Error("SGNEnabled = true for the xor encoder, want false")
 	}
 }
+
+// optionsFromConfig must faithfully invert buildImplantConfig so the edit
+// dialog re-loads a profile exactly as it was saved. This round-trips a fully
+// populated profile (non-default timers, windows shellcode beacon over mTLS,
+// build options, an encoder, and Donut tuning) and checks the recovered options
+// match. Timer defaults are deliberately non-default here so a dropped field
+// would show up rather than be masked by the default it happens to equal.
+func TestOptionsFromConfigRoundTrip(t *testing.T) {
+	in := GenerateOptions{
+		OS: "windows", Arch: "amd64", Format: "shellcode",
+		IsBeacon: true, Interval: 45, Jitter: 7,
+		Reconnect: 90, MaxErrors: 500, Poll: 120,
+		C2Type: "mtls", C2Host: "10.10.14.2", C2Port: 8888,
+		Debug: true, Evasion: true, ObfuscateSymbols: true, NetGo: true,
+		LimitDomainJoined: true, LimitHostname: "WKSTN-01", LimitUsername: "jdoe",
+		LimitFileExists: `C:\Windows\System32\notepad.exe`, LimitLocale: "en-US",
+		LimitDatetime:    "2026-12-31 23:59:59",
+		ShellcodeCompress: true, ShellcodeEntropy: 3, ShellcodeExitOpt: 2,
+		ShellcodeBypass: 2, ShellcodeHeaders: 2, ShellcodeThread: true,
+		ShellcodeUnicode: true, ShellcodeOEP: 4096,
+	}
+	cfg := buildImplantConfig(in, clientpb.ShellcodeEncoder_SHIKATA_GA_NAI)
+	got := optionsFromConfig(cfg)
+
+	checks := []struct {
+		name       string
+		gotV, want any
+	}{
+		{"OS", got.OS, in.OS}, {"Arch", got.Arch, in.Arch}, {"Format", got.Format, in.Format},
+		{"IsBeacon", got.IsBeacon, in.IsBeacon},
+		{"Interval", got.Interval, in.Interval}, {"Jitter", got.Jitter, in.Jitter},
+		{"Reconnect", got.Reconnect, in.Reconnect}, {"MaxErrors", got.MaxErrors, in.MaxErrors},
+		{"Poll", got.Poll, in.Poll},
+		{"C2Type", got.C2Type, in.C2Type}, {"C2Host", got.C2Host, in.C2Host}, {"C2Port", got.C2Port, in.C2Port},
+		{"Debug", got.Debug, in.Debug}, {"Evasion", got.Evasion, in.Evasion},
+		{"ObfuscateSymbols", got.ObfuscateSymbols, in.ObfuscateSymbols}, {"NetGo", got.NetGo, in.NetGo},
+		{"LimitDomainJoined", got.LimitDomainJoined, in.LimitDomainJoined},
+		{"LimitHostname", got.LimitHostname, in.LimitHostname}, {"LimitUsername", got.LimitUsername, in.LimitUsername},
+		{"LimitFileExists", got.LimitFileExists, in.LimitFileExists}, {"LimitLocale", got.LimitLocale, in.LimitLocale},
+		{"LimitDatetime", got.LimitDatetime, in.LimitDatetime},
+		{"ShellcodeEncoder", got.ShellcodeEncoder, "shikata_ga_nai"},
+		{"ShellcodeCompress", got.ShellcodeCompress, in.ShellcodeCompress},
+		{"ShellcodeEntropy", got.ShellcodeEntropy, in.ShellcodeEntropy},
+		{"ShellcodeExitOpt", got.ShellcodeExitOpt, in.ShellcodeExitOpt},
+		{"ShellcodeBypass", got.ShellcodeBypass, in.ShellcodeBypass},
+		{"ShellcodeHeaders", got.ShellcodeHeaders, in.ShellcodeHeaders},
+		{"ShellcodeThread", got.ShellcodeThread, in.ShellcodeThread},
+		{"ShellcodeUnicode", got.ShellcodeUnicode, in.ShellcodeUnicode},
+		{"ShellcodeOEP", got.ShellcodeOEP, in.ShellcodeOEP},
+	}
+	for _, c := range checks {
+		if c.gotV != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.gotV, c.want)
+		}
+	}
+}
+
+// A non-beacon http profile with default-only timers must come back with the
+// http C2 parsed and the beacon flag clear.
+func TestOptionsFromConfigHTTPSession(t *testing.T) {
+	cfg := buildImplantConfig(GenerateOptions{
+		OS: "linux", Arch: "arm64", Format: "exe",
+		C2Type: "https", C2Host: "cdn.example.com", C2Port: 443,
+	}, clientpb.ShellcodeEncoder_NONE)
+	got := optionsFromConfig(cfg)
+	if got.IsBeacon {
+		t.Error("IsBeacon = true, want false")
+	}
+	if got.C2Type != "https" || got.C2Host != "cdn.example.com" || got.C2Port != 443 {
+		t.Errorf("C2 = %s/%s:%d, want https/cdn.example.com:443", got.C2Type, got.C2Host, got.C2Port)
+	}
+	if got.Format != "exe" {
+		t.Errorf("Format = %q, want exe", got.Format)
+	}
+	if got.ShellcodeEncoder != "none" {
+		t.Errorf("ShellcodeEncoder = %q, want none", got.ShellcodeEncoder)
+	}
+}
