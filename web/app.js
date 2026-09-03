@@ -258,6 +258,13 @@ function sleepLabel(rec) {
   const secs = (ns) => Math.max(0, Math.round((ns || 0) / 1e9));
   return `${secs(rec.a.Interval)}s / ${secs(rec.a.Jitter)}s`;
 }
+// nextCheckinLabel shows when a beacon is next expected to phone home (only
+// beacons have a NextCheckin; sessions are live). ago() renders a future time
+// as "in Xs" and a past one as "Xs ago", so an overdue beacon reads as late.
+function nextCheckinLabel(rec) {
+  if (rec.kind !== 'beacon' || !rec.a.NextCheckin) return '—';
+  return ago(rec.a.NextCheckin);
+}
 // removeAgentRecord clears one agent's record from the console: a beacon (dead
 // or alive) is deleted via RmBeacon; a session has no such "just forget it"
 // RPC, so a dead session is cleared via Kill instead — Sliver's Kill handler
@@ -286,7 +293,7 @@ async function loadAgents() {
       if (pane && $(`.subtab[data-sub="info"].active`, pane)) renderInfo(id, pane);
     }
   } catch (e) {
-    $('#tblBody').innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`;
+    $('#tblBody').innerHTML = `<tr><td colspan="10" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 function renderChips() {
@@ -300,7 +307,7 @@ function renderTable() {
   const tbody = $('#tblBody');
   const ids = STATE.order.filter(matchesFilter);
   if (!ids.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
@@ -312,7 +319,7 @@ function renderTable() {
       `<td><span class="monitor" style="background:${monitorColor(rec)}"></span></td>` +
       `<td>${esc(a.Name || agentName(a))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
       `<td>${esc(a.Transport)}</td><td class="num">${a.PID}</td><td class="num">${esc(a.Arch)}</td>` +
-      `<td class="num">${esc(ago(a.LastCheckin))}</td><td class="num">${esc(sleepLabel(rec))}</td>`;
+      `<td class="num">${esc(ago(a.LastCheckin))}</td><td class="num">${esc(nextCheckinLabel(rec))}</td><td class="num">${esc(sleepLabel(rec))}</td>`;
     tr.addEventListener('click', () => openAgentConsole(id));
     tr.addEventListener('contextmenu', (e) => { e.preventDefault(); showAgentMenu(id, e.clientX, e.clientY); });
     tbody.appendChild(tr);
@@ -1396,6 +1403,8 @@ function renderInfo(id, root) {
     ['remote address', remoteAddr(a), true], ['transport', a.Transport], ['pid', a.PID],
     ['version', a.Version], ['last check-in', ago(a.LastCheckin)],
   ];
+  // Beacons phone home on a schedule; show when the next check-in is due.
+  if (rec.isBeacon) rows.push(['next check-in', a.NextCheckin ? ago(a.NextCheckin) : '—']);
   const dl = elIn(root, 'info-dl');
   dl.innerHTML = '';
   for (const [k, v, mono] of rows) {
