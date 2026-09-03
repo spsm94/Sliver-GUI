@@ -708,7 +708,16 @@ func hConsole(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"output": out})
 		return
 	}
-	out, err := runSliverConsole(r.PathValue("id"), in.Cmd)
+	// Beacons task asynchronously: a one-shot console only queues the task and
+	// exits, so sessions returned output but beacons showed only "[*] Tasked
+	// beacon ...". Route beacons through runBeaconConsole, which waits for the
+	// check-in and renders the result with `tasks fetch`.
+	id := r.PathValue("id")
+	run := runSliverConsole
+	if id != "" && sliver.IsBeacon(id) {
+		run = runBeaconConsole
+	}
+	out, err := run(id, in.Cmd)
 	if err != nil {
 		writeErr(w, err, 502)
 		return

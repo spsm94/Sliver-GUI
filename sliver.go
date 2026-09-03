@@ -462,6 +462,59 @@ func (s *Sliver) BeaconTaskContent(taskID string) (*clientpb.BeaconTask, error) 
 	return s.rpc.GetBeaconTaskContent(ctx, &clientpb.BeaconTask{ID: taskID})
 }
 
+// IsBeacon reports whether the cached target id is a beacon (vs a session).
+// Populated by the Sessions()/Beacons() list calls the frontend makes on load,
+// so it is known by the time an operator opens the target's Terminal tab.
+func (s *Sliver) IsBeacon(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.targets[id].kind == kindBeacon
+}
+
+// beaconTaskByPrefix finds the beacon's task whose full UUID begins with the
+// short id sliver prints when it queues one ("Tasked beacon NAME (3a19349b)").
+// The server's task lookups require the full UUID (uuid.FromString), so the
+// native console's short id has to be expanded here first.
+func (s *Sliver) beaconTaskByPrefix(beaconID, shortID string) (*clientpb.BeaconTask, error) {
+	ctx, cancel := ctxTimeout()
+	defer cancel()
+	resp, err := s.rpc.GetBeaconTasks(ctx, &clientpb.Beacon{ID: beaconID})
+	if err != nil {
+		return nil, err
+	}
+	short := strings.ToLower(shortID)
+	for _, t := range resp.Tasks {
+		if strings.HasPrefix(strings.ToLower(t.ID), short) {
+			return t, nil
+		}
+	}
+	return nil, fmt.Errorf("no beacon task matching %s", shortID)
+}
+
+// WaitBeaconTask blocks until the beacon task with the given short-id prefix
+// reaches a terminal state (completed/failed/canceled) or the timeout elapses.
+// It lets the native console turn an async beacon task back into a synchronous
+// result the same way resolve() does for the typed file/process views. Only the
+// task State is consulted here; the rendered output is fetched separately with
+// `tasks fetch`, so GetBeaconTasks' lighter (content-free) tasks are enough.
+func (s *Sliver) WaitBeaconTask(beaconID, shortID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		task, err := s.beaconTaskByPrefix(beaconID, shortID)
+		if err != nil {
+			return err
+		}
+		switch task.State {
+		case "completed", "failed", "canceled":
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("beacon has not checked in yet (task %s); the task is queued — re-run the command in a few seconds to see its result", task.State)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 func (s *Sliver) Ls(id, path string) (*sliverpb.Ls, error) {
 	ctx, cancel := ctxTimeout()
 	defer cancel()

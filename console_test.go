@@ -109,3 +109,33 @@ func TestIsArmoryInstallAll(t *testing.T) {
 		}
 	}
 }
+
+// taskedRE must pull the short task id out of the "Tasked beacon" line the
+// one-shot console prints when it queues a beacon task, and must NOT match the
+// "Active beacon" line `use` prints (that id is the full UUID, and matching it
+// would send us fetching the wrong — or a malformed — task).
+func TestTaskedRE(t *testing.T) {
+	out := "[*] Active beacon THOUGHTLESS_LITIGATION (29d33767-b1b9-4ce9-9a51-0714ca0adc05)\n" +
+		"[*] Tasked beacon THOUGHTLESS_LITIGATION (3a19349b)\n"
+	m := taskedRE.FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("no match in %q", out)
+	}
+	if m[1] != "3a19349b" {
+		t.Errorf("task id = %q, want %q", m[1], "3a19349b")
+	}
+}
+
+// A command that queues nothing (client-side output, a parse error) has no
+// "Tasked beacon" line, so runBeaconConsole must fall through and return it
+// unchanged rather than block waiting for a task that will never exist.
+func TestTaskedRENoTask(t *testing.T) {
+	for _, out := range []string{
+		"[*] Active beacon THOUGHTLESS_LITIGATION (29d33767-b1b9-4ce9-9a51-0714ca0adc05)\n[!] rc line 2 error: parse error: Unterminated backslash-escape",
+		"Logon ID: COMMANDO\\Stephen",
+	} {
+		if m := taskedRE.FindStringSubmatch(out); m != nil {
+			t.Errorf("unexpected task-id match %q in %q", m[1], out)
+		}
+	}
+}

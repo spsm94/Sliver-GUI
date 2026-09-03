@@ -160,6 +160,46 @@ func runSliverConsoleScript(sessionID string, commands []string, timeout time.Du
 	return clean, nil
 }
 
+// taskedRE captures the short task id sliver prints after queuing a beacon
+// task, e.g. "[*] Tasked beacon THOUGHTLESS_LITIGATION (3a19349b)". The `use`
+// line ("[*] Active beacon NAME (full-uuid)") never matches because it says
+// "Active", not "Tasked". `.` does not cross newlines, so the group stays on
+// the one Tasked line.
+var taskedRE = regexp.MustCompile(`Tasked beacon .*\(([0-9a-fA-F]+)\)`)
+
+// runBeaconConsole runs one native command against a beacon and waits for its
+// asynchronous result. A one-shot console only *queues* a beacon task and then
+// exits, printing "[*] Tasked beacon NAME (id)" with no output — which is why
+// beacon commands appeared to return nothing while sessions (synchronous) were
+// fine. Here we parse that task id, wait for the beacon to check in, then render
+// the completed task natively with `tasks fetch <id>`, giving the operator the
+// same output the real CLI shows once the beacon reports back.
+func runBeaconConsole(beaconID, command string) (string, error) {
+	out, err := runSliverConsole(beaconID, command)
+	if err != nil {
+		return out, err
+	}
+	m := taskedRE.FindStringSubmatch(out)
+	if m == nil {
+		// The command did not queue a task: a client-side command (info, help),
+		// a parse error, or one already answered inline. Return it unchanged.
+		return out, nil
+	}
+	shortID := m[1]
+	if waitErr := sliver.WaitBeaconTask(beaconID, shortID, beaconWait); waitErr != nil {
+		// Not checked in within the wait window. Hand back the "Tasked" line plus
+		// the hint so the operator knows the task is queued, not lost.
+		return strings.TrimSpace(out) + "\n\n[*] " + waitErr.Error(), nil
+	}
+	// The task is terminal — render it natively. `tasks fetch <shortid>` matches
+	// on an id prefix, so the short id from the queue line is enough.
+	result, ferr := runSliverConsole(beaconID, "tasks fetch "+shortID)
+	if ferr != nil {
+		return result, ferr
+	}
+	return result, nil
+}
+
 // ---- armory install all ----
 // The native `armory install all` cannot run here: before installing anything it
 // calls forms.Confirm("Install N aliases and M extensions?"), and this console
