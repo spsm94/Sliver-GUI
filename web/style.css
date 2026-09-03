@@ -297,3 +297,14 @@ td.num { font-variant-numeric: tabular-nums; color: var(--ink-dim); }
 .logline.disconnect { color: var(--priv-high); }
 
 /* utility tables inside dock panes (Downloads-style rows, saved profiles, etc.) reuse table.tbl */
+
+/* resizable agent-table columns (see initColumnResize in app.js) */
+table.tgt.cols-frozen { table-layout: fixed; }
+table.tgt.cols-frozen td { overflow: hidden; text-overflow: ellipsis; }
+table.tgt thead th .col-resizer {
+  position: absolute; top: 0; right: 0; width: 7px; height: 100%;
+  cursor: col-resize; user-select: none; z-index: 3;
+}
+table.tgt thead th .col-resizer:hover,
+table.tgt thead th .col-resizer.active { background: var(--accent); opacity: .55; }
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none !important; }

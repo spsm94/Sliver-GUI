@@ -2478,10 +2478,70 @@ api('GET', '/api/config').then((c) => {
   $('#conn').innerHTML = `${esc(c.operator)} @ ${esc(c.server)}`;
 }).catch((e) => { $('#conn').textContent = 'error: ' + e.message; });
 
+// ---- resizable agent-table columns (drag a header's right edge, Excel-style) ----
+// Widths are frozen lazily: an untouched table keeps its natural content-based
+// layout, and only switches to fixed layout the first time a column is dragged,
+// so the default sizing still looks right. Widths persist per column in
+// localStorage; double-click a grip to clear them and return to auto layout.
+const COLW_KEY = 'tgtColWidths';
+function initColumnResize() {
+  const table = document.querySelector('table.tgt');
+  if (!table || !table.tHead || !table.tHead.rows[0]) return;
+  const ths = Array.from(table.tHead.rows[0].cells);
+  const sumStyle = () => ths.reduce((a, t) => a + (parseFloat(t.style.width) || 0), 0);
+  const measure = () => ths.map((t) => Math.round(t.getBoundingClientRect().width));
+  const freeze = (widths) => {
+    ths.forEach((t, i) => { t.style.width = widths[i] + 'px'; });
+    table.style.width = widths.reduce((a, b) => a + b, 0) + 'px';
+    table.classList.add('cols-frozen');
+  };
+  const ensureFrozen = () => { if (!table.classList.contains('cols-frozen')) freeze(measure()); };
+  const save = () => { try { localStorage.setItem(COLW_KEY, JSON.stringify(ths.map((t) => Math.round(parseFloat(t.style.width) || 0)))); } catch (e) { /* storage off */ } };
+
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(COLW_KEY) || 'null'); } catch (e) { saved = null; }
+  if (Array.isArray(saved) && saved.length === ths.length && saved.every((n) => n > 0)) freeze(saved);
+
+  ths.forEach((th) => {
+    const grip = el('div', 'col-resizer');
+    grip.title = 'drag to resize · double-click to reset';
+    grip.addEventListener('mousedown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      ensureFrozen();
+      const startX = e.clientX;
+      const startW = th.getBoundingClientRect().width;
+      grip.classList.add('active');
+      document.body.classList.add('col-resizing');
+      const onMove = (ev) => {
+        th.style.width = Math.max(36, Math.round(startW + (ev.clientX - startX))) + 'px';
+        table.style.width = sumStyle() + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        grip.classList.remove('active');
+        document.body.classList.remove('col-resizing');
+        save();
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    grip.addEventListener('dblclick', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      table.classList.remove('cols-frozen');
+      table.style.width = '';
+      ths.forEach((t) => { t.style.width = ''; });
+      try { localStorage.removeItem(COLW_KEY); } catch (err) { /* storage off */ }
+    });
+    th.appendChild(grip);
+  });
+}
+
 initEventLog();
 loadInterfaces();
 loadAgents();
 setInterval(loadAgents, 5000);
+initColumnResize();
 startEvents();
 
 // Save/restore active tab
