@@ -41,12 +41,22 @@ function ago(unixSec) {
   if (d < 5) return 'just now';
   return fmtDur(d) + ' ago';
 }
-// fmtWhen renders an absolute local date + time (e.g. "Sep 4, 09:12"). Used for
-// first-contact, where a fixed timestamp tracks arrival order better than a
-// relative "ago" that keeps sliding.
+// fmtWhen renders an absolute local timestamp as "YYYYMMDD HH:MM:SS" (24-hour).
+// Used for first-contact, where a fixed, sortable timestamp tracks arrival order
+// better than a relative "ago" that keeps sliding.
 function fmtWhen(unixSec) {
   if (!unixSec) return '—';
-  return new Date(unixSec * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const d = new Date(unixSec * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+// procLabel is the process the implant runs as: the Filename (Argv[0]) basename
+// plus its PID, e.g. "explorer.exe (4821)". Sliver's agent record carries no
+// parent-process id, so this is the implant's own host process.
+function procLabel(a) {
+  const base = (a.Filename || '').split(/[\\/]/).pop();
+  if (base) return `${base} (${a.PID})`;
+  return a.PID ? String(a.PID) : '—';
 }
 function fmtDur(s) {
   if (s < 60) return s + 's';
@@ -99,6 +109,7 @@ const STATE = {
   order: [],
   interfaces: [], // [{name, ip, version, up}]
   filter: '',
+  sort: null,   // { key, dir } — table sort (e.g. sort by first-contact), null = natural order
   panels: {},   // agentId -> { cwd }
   nodePos: {},  // agentId -> {x,y} — manually dragged graph node positions
   tabNames: {}, // id -> custom tab name
@@ -300,7 +311,7 @@ async function loadAgents() {
       if (pane && $(`.subtab[data-sub="info"].active`, pane)) renderInfo(id, pane);
     }
   } catch (e) {
-    $('#tblBody').innerHTML = `<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
+    $('#tblBody').innerHTML = `<tr><td colspan="10" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 function renderChips() {
@@ -310,11 +321,35 @@ function renderChips() {
   $('#chip-dead').textContent = n('dead');
 }
 
+// toggleSort cycles a column through ascending -> descending -> off. The header
+// text carries a ▲/▼ indicator; sort survives the 5s refresh because renderTable
+// reads STATE.sort each time.
+function toggleSort(key) {
+  const s = STATE.sort;
+  if (!s || s.key !== key) STATE.sort = { key, dir: 'asc' };
+  else if (s.dir === 'asc') STATE.sort = { key, dir: 'desc' };
+  else STATE.sort = null;
+  updateSortIndicators();
+  renderTable();
+}
+function updateSortIndicators() {
+  const th = $('#th-first');
+  if (!th || !th.childNodes[0]) return;
+  const s = STATE.sort;
+  const arrow = s && s.key === 'first' ? (s.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  // childNodes[0] is the label text node; the resize grip is a separate child.
+  th.childNodes[0].nodeValue = 'first' + arrow;
+}
 function renderTable() {
   const tbody = $('#tblBody');
-  const ids = STATE.order.filter(matchesFilter);
+  let ids = STATE.order.filter(matchesFilter);
+  // Optional sort (e.g. by first-contact) — a copy so STATE.order stays natural.
+  if (STATE.sort && STATE.sort.key === 'first') {
+    const dir = STATE.sort.dir === 'desc' ? -1 : 1;
+    ids = ids.slice().sort((x, y) => ((STATE.agents[x].a.FirstContact || 0) - (STATE.agents[y].a.FirstContact || 0)) * dir);
+  }
   if (!ids.length) {
-    tbody.innerHTML = `<tr><td colspan="11" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
@@ -325,7 +360,7 @@ function renderTable() {
     tr.innerHTML =
       `<td><span class="monitor" style="background:${monitorColor(rec)}"></span></td>` +
       `<td>${esc(a.Name || agentName(a))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
-      `<td>${esc(a.Transport)}</td><td class="num">${a.PID}</td><td class="num">${esc(a.Arch)}</td>` +
+      `<td>${esc(a.Transport)}</td><td class="mono">${esc(procLabel(a))}</td>` +
       `<td class="num">${esc(fmtWhen(a.FirstContact))}</td>` +
       `<td class="num">${esc(ago(a.LastCheckin))}</td><td class="num">${esc(nextCheckinLabel(rec))}</td><td class="num">${esc(sleepLabel(rec))}</td>`;
     tr.addEventListener('click', () => openAgentConsole(id));
@@ -2551,6 +2586,15 @@ loadInterfaces();
 loadAgents();
 setInterval(loadAgents, 5000);
 initColumnResize();
+// Click the first-contact header to sort by arrival time (ignore clicks that
+// land on the resize grip so resizing doesn't also trigger a sort).
+{
+  const thFirst = $('#th-first');
+  if (thFirst) thFirst.addEventListener('click', (e) => {
+    if (e.target.classList.contains('col-resizer')) return;
+    toggleSort('first');
+  });
+}
 startEvents();
 
 // Save/restore active tab

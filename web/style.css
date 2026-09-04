@@ -308,3 +308,7 @@ table.tgt thead th .col-resizer {
 table.tgt thead th .col-resizer:hover,
 table.tgt thead th .col-resizer.active { background: var(--accent); opacity: .55; }
 body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* sortable table header (click to sort; ▲/▼ shown in the header text) */
+table.tgt thead th.sortable { cursor: pointer; user-select: none; }
+table.tgt thead th.sortable:hover { color: var(--ink); }
