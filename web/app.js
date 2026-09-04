@@ -41,6 +41,13 @@ function ago(unixSec) {
   if (d < 5) return 'just now';
   return fmtDur(d) + ' ago';
 }
+// fmtWhen renders an absolute local date + time (e.g. "Sep 4, 09:12"). Used for
+// first-contact, where a fixed timestamp tracks arrival order better than a
+// relative "ago" that keeps sliding.
+function fmtWhen(unixSec) {
+  if (!unixSec) return '—';
+  return new Date(unixSec * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 function fmtDur(s) {
   if (s < 60) return s + 's';
   if (s < 3600) return Math.floor(s / 60) + 'm';
@@ -293,7 +300,7 @@ async function loadAgents() {
       if (pane && $(`.subtab[data-sub="info"].active`, pane)) renderInfo(id, pane);
     }
   } catch (e) {
-    $('#tblBody').innerHTML = `<tr><td colspan="10" class="empty">${esc(e.message)}</td></tr>`;
+    $('#tblBody').innerHTML = `<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 function renderChips() {
@@ -307,7 +314,7 @@ function renderTable() {
   const tbody = $('#tblBody');
   const ids = STATE.order.filter(matchesFilter);
   if (!ids.length) {
-    tbody.innerHTML = `<tr><td colspan="10" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
@@ -319,6 +326,7 @@ function renderTable() {
       `<td><span class="monitor" style="background:${monitorColor(rec)}"></span></td>` +
       `<td>${esc(a.Name || agentName(a))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
       `<td>${esc(a.Transport)}</td><td class="num">${a.PID}</td><td class="num">${esc(a.Arch)}</td>` +
+      `<td class="num">${esc(fmtWhen(a.FirstContact))}</td>` +
       `<td class="num">${esc(ago(a.LastCheckin))}</td><td class="num">${esc(nextCheckinLabel(rec))}</td><td class="num">${esc(sleepLabel(rec))}</td>`;
     tr.addEventListener('click', () => openAgentConsole(id));
     tr.addEventListener('contextmenu', (e) => { e.preventDefault(); showAgentMenu(id, e.clientX, e.clientY); });
@@ -1401,7 +1409,8 @@ function renderInfo(id, root) {
     ['type', rec.kind], ['agent id', a.ID, true], ['name', a.Name], ['user', a.Username],
     ['hostname', a.Hostname], ['domain', domainOf(a)], ['os / arch', `${a.OS}/${a.Arch}`],
     ['remote address', remoteAddr(a), true], ['transport', a.Transport], ['pid', a.PID],
-    ['version', a.Version], ['last check-in', ago(a.LastCheckin)],
+    ['version', a.Version],
+    ['first contact', a.FirstContact ? fmtWhen(a.FirstContact) : '—'], ['last check-in', ago(a.LastCheckin)],
   ];
   // Beacons phone home on a schedule; show when the next check-in is due.
   if (rec.isBeacon) rows.push(['next check-in', a.NextCheckin ? ago(a.NextCheckin) : '—']);
