@@ -254,6 +254,11 @@ function agentName(a) {
   if (RENAMED[a.ID] && a.Name) return a.Name;
   return hostLabel(a);
 }
+// shortId is the abbreviated session/beacon id the Sliver CLI shows — the first
+// dash-delimited segment of the UUID, e.g. "1d1c8617".
+function shortId(id) {
+  return (id || '').split('-')[0];
+}
 function remoteAddr(a) {
   const r = a.RemoteAddress || '';
   const m = r.match(/^tcp\((.+)\)->(.+)$/);
@@ -311,7 +316,7 @@ async function loadAgents() {
       if (pane && $(`.subtab[data-sub="info"].active`, pane)) renderInfo(id, pane);
     }
   } catch (e) {
-    $('#tblBody').innerHTML = `<tr><td colspan="10" class="empty">${esc(e.message)}</td></tr>`;
+    $('#tblBody').innerHTML = `<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 function renderChips() {
@@ -349,7 +354,7 @@ function renderTable() {
     ids = ids.slice().sort((x, y) => ((STATE.agents[x].a.FirstContact || 0) - (STATE.agents[y].a.FirstContact || 0)) * dir);
   }
   if (!ids.length) {
-    tbody.innerHTML = `<tr><td colspan="10" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="empty">${STATE.filter ? 'no matches' : 'no agents connected'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
@@ -359,7 +364,7 @@ function renderTable() {
     if (rec.kind === 'dead') tr.className = 'is-dead';
     tr.innerHTML =
       `<td><span class="monitor" style="background:${monitorColor(rec)}"></span></td>` +
-      `<td>${esc(a.Name || agentName(a))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
+      `<td>${esc(a.Name || agentName(a))}</td><td class="mono">${esc(shortId(a.ID))}</td><td>${esc(a.Hostname)}</td><td>${esc(a.Username)}</td>` +
       `<td>${esc(a.Transport)}</td><td class="mono">${esc(procLabel(a))}</td>` +
       `<td class="num">${esc(fmtWhen(a.FirstContact))}</td>` +
       `<td class="num">${esc(ago(a.LastCheckin))}</td><td class="num">${esc(nextCheckinLabel(rec))}</td><td class="num">${esc(sleepLabel(rec))}</td>`;
@@ -1171,7 +1176,9 @@ function openAgentConsole(id, subtab) {
   if (!pane) {
     pane = buildAgentPanel(id, rec);
     dockBody.appendChild(pane);
-    const tabLabel = `${agentName(rec.a)}\\${rec.a.Username || '?'}`;
+    // Beacons default to the Sliver-style short id (e.g. 1d1c8617); sessions
+    // keep the host\user label. Either can still be renamed (double-click tab).
+    const tabLabel = rec.kind === 'beacon' ? shortId(rec.a.ID) : `${agentName(rec.a)}\\${rec.a.Username || '?'}`;
     addTab(id, tabLabel, rec.kind === 'beacon' ? 'var(--priv-med)' : (rec.kind === 'dead' ? 'var(--dead)' : 'var(--ok)'), true);
   }
   activateTab(id);
